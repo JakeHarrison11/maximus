@@ -522,14 +522,16 @@ impl MaximusApp {
             self.last_mode = self.settings.minimal;
             // Sizes are stored in logical pixels; egui sizes are in points, which the UI scale stretches.
             let [w, h] = self.settings.size_for_mode();
-            let maximized = self.settings.maximized_for_mode();
-            if !maximized {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
-                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w / zoom, h / zoom)));
-            } else {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+            // Only touch the maximized state when it actually has to change; a redundant request can cancel the resize.
+            let want_max = self.settings.maximized_for_mode();
+            let is_max = ctx.input(|i| i.viewport().maximized).unwrap_or(false);
+            if want_max != is_max {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(want_max));
             }
-            self.resize_hold_until = now + 0.8;
+            if !want_max {
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w / zoom, h / zoom)));
+            }
+            self.resize_hold_until = now + 1.2;
             self.settings.save();
             return;
         }
