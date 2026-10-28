@@ -107,11 +107,10 @@ impl MaximusApp {
         let size = self.settings.math_size * 0.9;
         egui::ScrollArea::vertical().id_salt("vars").max_height((ui.available_height() - 150.0).max(80.0)).show(ui, |ui| {
             for v in &vars {
-                ui.horizontal_top(|ui| {
-                    if icons::icon_button(ui, Icon::Close, egui::vec2(20.0, 20.0), false).on_hover_text("Delete").clicked() {
-                        let name = v.name.clone();
-                        self.session.remove_variable(&name);
-                    }
+                let mut delete_slot = egui::Rect::NOTHING;
+                let row = ui.horizontal(|ui| {
+                    // The delete button is placed once the row's height is known, so it is centred on the row.
+                    delete_slot = ui.allocate_space(egui::vec2(22.0, 22.0)).1;
                     let editing = self.var_edit.as_ref().map_or(false, |e| e.name == v.name);
                     if editing {
                         let mut edit = self.var_edit.take().unwrap();
@@ -130,41 +129,31 @@ impl MaximusApp {
                             self.var_edit = Some(edit);
                         }
                     } else {
+                        // Every row uses the same font and size: the name, an equals sign and the typeset value.
+                        let math_text = |s: &str| RichText::new(s.to_string()).family(maximus_render::italic_family()).size(size);
                         egui::ScrollArea::horizontal().id_salt(("var-scroll", &v.name)).auto_shrink([false, true]).show(ui, |ui| {
-                            if v.is_function {
-                                match self.tree_for(&v.value) {
-                                    Some(t) => {
-                                        let r = maximus_render::show_math(ui, &t, size, color);
-                                        if r.double_clicked() {
-                                            self.start_var_edit(v);
-                                        }
-                                        r.on_hover_text("Double-click to edit");
-                                    }
-                                    None => {
-                                        ui.label(RichText::new(&v.value).monospace());
-                                    }
+                            ui.horizontal(|ui| {
+                                let value_tree = self.tree_for(&v.value);
+                                if !v.is_function {
+                                    ui.label(math_text(&v.name));
+                                    ui.label(RichText::new("=").family(maximus_render::roman_family()).size(size));
                                 }
-                            } else {
-                                ui.horizontal(|ui| {
-                                    ui.label(RichText::new(&v.name).italics().strong());
-                                    ui.label("=");
-                                    match self.tree_for(&v.value) {
-                                        Some(t) => {
-                                            let r = maximus_render::show_math(ui, &t, size, color);
-                                            if r.double_clicked() {
-                                                self.start_var_edit(v);
-                                            }
-                                            r.on_hover_text("Double-click to edit");
-                                        }
-                                        None => {
-                                            ui.label(RichText::new(&v.value).monospace());
-                                        }
-                                    }
-                                });
-                            }
+                                let resp = match value_tree {
+                                    Some(t) => maximus_render::show_math(ui, &t, size, color),
+                                    None => ui.label(RichText::new(&v.value).family(maximus_render::roman_family()).size(size)),
+                                };
+                                if resp.double_clicked() {
+                                    self.start_var_edit(v);
+                                }
+                                resp.on_hover_text("Double-click to edit");
+                            });
                         });
                     }
                 });
+                let slot = egui::Rect::from_center_size(egui::pos2(delete_slot.center().x, row.response.rect.center().y), delete_slot.size());
+                if ui.put(slot, |ui: &mut egui::Ui| icons::icon_button(ui, Icon::Trash, slot.size(), false).on_hover_text("Delete")).clicked() {
+                    self.session.remove_variable(&v.name);
+                }
                 ui.separator();
             }
         });

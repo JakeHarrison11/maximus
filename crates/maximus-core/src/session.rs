@@ -3,7 +3,7 @@
 use crate::backend::*;
 use crate::notebook::*;
 use maximus_math::ParseCtx;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 #[derive(Clone, Debug, PartialEq)]
 enum JobKind {
@@ -55,6 +55,8 @@ pub struct Session {
     raw_collect: RawResult,
     /// Outputs of the cell being evaluated; they replace the old ones only once evaluation ends.
     cell_collect: Vec<OutputItem>,
+    /// Names the user has assigned or defined; packages' own variables and functions are not listed.
+    user_names: HashSet<String>,
     raw_done: HashMap<u64, RawResult>,
 }
 
@@ -72,6 +74,7 @@ impl Session {
             next_raw: 1,
             raw_collect: RawResult::default(),
             cell_collect: Vec::new(),
+            user_names: HashSet::new(),
             raw_done: HashMap::new(),
         };
         s.sync_status();
@@ -251,6 +254,7 @@ impl Session {
                     }
                     Ok(src) => {
                         cell.state = CellState::Running;
+                        self.user_names.extend(defined_names(&src));
                         RequestKind::Eval(src)
                     }
                     Err(e) => {
@@ -260,6 +264,12 @@ impl Session {
                         return;
                     }
                 }
+            }
+            JobKind::Raw(_) => {
+                if let RequestKind::Eval(src) = &job.req {
+                    self.user_names.extend(defined_names(src));
+                }
+                job.req.clone()
             }
             _ => job.req.clone(),
         };
@@ -307,7 +317,7 @@ impl Session {
                 Err(e) => OutputItem::Error(format!("Bad plot data: {}", e)),
             }),
             EventKind::Vars(v) => {
-                self.variables = v;
+                self.variables = v.into_iter().filter(|x| self.user_names.contains(&x.name)).collect();
                 None
             }
             EventKind::Done { ok } => {
@@ -378,6 +388,95 @@ impl Session {
     }
 }
 
+/// Names that a piece of Maxima source assigns (`a: 1`, `a[i]: 1`, `a :: 1`) or defines
+/// (`f(x) := ...`, `f[n] := ...`, `define(f(x), ...)`). Strings and comments are skipped.
+pub fn defined_names(src: &str) -> Vec<String> {
+    let c: Vec<char> = src.chars().collect();
+    let is_start = |ch: char| ch.is_alphabetic() || ch == '_' || ch == '%';
+    let is_part = |ch: char| ch.is_alphanumeric() || ch == '_' || ch == '%';
+    let skip_ws = |mut j: usize| {
+        while j < c.len() && c[j].is_whitespace() {
+            j += 1;
+        }
+        j
+    };
+    let skip_balanced = |j: usize, open: char, close: char| -> usize {
+        let mut depth = 0;
+        let mut k = j;
+        while k < c.len() {
+            if c[k] == open {
+                depth += 1;
+            } else if c[k] == close {
+                depth -= 1;
+                if depth == 0 {
+                    return k + 1;
+                }
+            }
+            k += 1;
+        }
+        c.len()
+    };
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < c.len() {
+        if c[i] == '/' && c.get(i + 1) == Some(&'*') {
+            i += 2;
+            while i + 1 < c.len() && !(c[i] == '*' && c[i + 1] == '/') {
+                i += 1;
+            }
+            i += 2;
+        } else if c[i] == '"' {
+            i += 1;
+            while i < c.len() && c[i] != '"' {
+                if c[i] == '\\' {
+                    i += 1;
+                }
+                i += 1;
+            }
+            i += 1;
+        } else if is_start(c[i]) {
+            let s = i;
+            while i < c.len() && is_part(c[i]) {
+                i += 1;
+            }
+            let name: String = c[s..i].iter().collect();
+            let mut j = skip_ws(i);
+            if name == "define" || name == "define_variable" {
+                if c.get(j) == Some(&'(') {
+                    let k = skip_ws(j + 1);
+                    let e = {
+                        let mut e = k;
+                        while e < c.len() && is_part(c[e]) {
+                            e += 1;
+                        }
+                        e
+                    };
+                    if e > k && is_start(c[k]) {
+                        out.push(c[k..e].iter().collect());
+                    }
+                }
+                continue;
+            }
+            if c.get(j) == Some(&'[') {
+                j = skip_ws(skip_balanced(j, '[', ']'));
+            }
+            let mut k = j;
+            if c.get(k) == Some(&'(') {
+                k = skip_ws(skip_balanced(k, '(', ')'));
+            }
+            let at = |p: usize, s: &str| s.chars().enumerate().all(|(n, ch)| c.get(p + n) == Some(&ch));
+            if at(k, ":=") || at(k, "::=") {
+                out.push(name);
+            } else if k == j && c.get(j) == Some(&':') {
+                out.push(name);
+            }
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
 /// Strips Maxima's debugger hint from error messages.
 pub fn clean_error(e: &str) -> String {
     let e = e.trim();
@@ -388,6 +487,18 @@ pub fn clean_error(e: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finds_assigned_and_defined_names() {
+        let n = |s: &str| defined_names(s);
+        assert_eq!(n("a: 5$ b:[1,2]; c : a+1"), vec!["a", "b", "c"]);
+        assert_eq!(n("f(x) := x^2 + a$ g[n] := n!; h(x,y):=x"), vec!["f", "g", "h"]);
+        assert_eq!(n("define(k(x), x+1)$ x_1: 3"), vec!["k", "x_1"]);
+        assert_eq!(n("a[1]: 4$ s :: \"t\""), vec!["a", "s"]);
+        // Not assignments: keyword arguments, strings, comments, calls.
+        assert!(n("plot2d(sin(x),[x,0,1])$ ev(e, x=1)$ \"a: b\"; /* z: 1 */ solve(x^2=1,x)").is_empty());
+        assert_eq!(n("block([i:0], total: i)"), vec!["i", "total"]);
+    }
 
     /// Echo backend: replies to every Eval with the input as a result.
     struct Echo {

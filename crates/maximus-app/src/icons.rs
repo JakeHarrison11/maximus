@@ -8,7 +8,7 @@ use egui::{Color32, Pos2, Rect, Response, Sense, Shape, Stroke, StrokeKind, Ui, 
 pub enum Icon {
     Play,
     Dots,
-    Close,
+    Trash,
     Check,
     Cross,
     Backspace,
@@ -34,7 +34,18 @@ pub fn draw_icon(ui: &Ui, icon: Icon, center: Pos2, size: f32, color: Color32) {
                 p.circle_filled(Pos2::new(center.x, center.y + dy * s), (size * 0.09).max(1.2), color);
             }
         }
-        Icon::Close | Icon::Cross => {
+        Icon::Trash => {
+            let s = s * 1.35;
+            let t = Stroke::new((size * 0.11).max(1.2), color);
+            let pt = |dx: f32, dy: f32| Pos2::new(center.x + dx * s, center.y + dy * s);
+            // body, lid, handle and the two slots
+            p.add(Shape::closed_line(vec![pt(-0.55, -0.2), pt(0.55, -0.2), pt(0.45, 0.85), pt(-0.45, 0.85)], t));
+            p.line_segment([pt(-0.85, -0.4), pt(0.85, -0.4)], t);
+            p.add(Shape::line(vec![pt(-0.25, -0.4), pt(-0.25, -0.8), pt(0.25, -0.8), pt(0.25, -0.4)], t));
+            p.line_segment([pt(-0.18, 0.05), pt(-0.15, 0.65)], t);
+            p.line_segment([pt(0.18, 0.05), pt(0.15, 0.65)], t);
+        }
+        Icon::Cross => {
             let d = 0.6 * s;
             p.line_segment([Pos2::new(center.x - d, center.y - d), Pos2::new(center.x + d, center.y + d)], stroke);
             p.line_segment([Pos2::new(center.x - d, center.y + d), Pos2::new(center.x + d, center.y - d)], stroke);
