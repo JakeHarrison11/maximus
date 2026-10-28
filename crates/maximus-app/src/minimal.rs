@@ -2,6 +2,7 @@
 //! The full CAS stays available; it uses the same notebook and session.
 
 use crate::app::*;
+use crate::icons::{self, Icon};
 use eframe::egui;
 use egui::{Align, Color32, Layout, RichText, Vec2};
 use maximus_core::*;
@@ -9,6 +10,20 @@ use maximus_math::from_latex;
 use maximus_render::editor::{EditorState, Template};
 use maximus_render::editor_ui::{math_editor, EditorStyle};
 use std::sync::Arc;
+
+/// Shows math that never widens its container: right-aligned when it fits, otherwise in a horizontal scroll area.
+fn math_fit(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, tree: &[maximus_math::Item], size: f32, color: Color32, right: bool) -> egui::Response {
+    let w = maximus_render::layout_tree(ui.ctx(), tree, size, false).w + 8.0;
+    let avail = ui.available_width();
+    if w <= avail {
+        if right {
+            ui.add_space(0.0);
+            return ui.with_layout(Layout::top_down(Align::Max), |ui| maximus_render::show_math(ui, tree, size, color)).inner;
+        }
+        return maximus_render::show_math(ui, tree, size, color);
+    }
+    egui::ScrollArea::horizontal().id_salt(("fit", id)).auto_shrink([false, true]).show(ui, |ui| maximus_render::show_math(ui, tree, size, color)).inner
+}
 
 impl MaximusApp {
     pub fn apply_insert_minimal(&mut self, ins: Insert) {
@@ -38,6 +53,7 @@ impl MaximusApp {
         self.session.evaluate_cell(id);
         self.min_editor.clear();
         self.min_scroll_to_end = true;
+        self.min_scroll_frames = 6;
     }
 
     fn key(&mut self, ui: &mut egui::Ui, label: &str, ins: Insert, w: f32) {
@@ -47,6 +63,7 @@ impl MaximusApp {
     }
 
     pub fn minimal_ui(&mut self, ui: &mut egui::Ui) {
+        ui.set_max_width(ui.available_width());
         let size = self.settings.math_size + 2.0;
         let color = ui.visuals().text_color();
         ui.horizontal(|ui| {
@@ -72,26 +89,30 @@ impl MaximusApp {
         let mut reuse: Option<String> = None;
         egui::ScrollArea::vertical().max_height(hist_h).auto_shrink([false, false]).stick_to_bottom(true).show(ui, |ui| {
             ui.set_max_width(ui.available_width());
-            let cells: Vec<(u64, String, Vec<OutputItem>, CellState)> = self
+            let cells: Vec<(u64, String, InputMode, Vec<OutputItem>, CellState)> = self
                 .session
                 .notebook
                 .cells
                 .iter()
                 .filter(|c| c.kind == CellKind::Code && !c.is_empty())
-                .map(|c| (c.id, c.source.clone(), c.outputs.clone(), c.state))
+                .map(|c| (c.id, c.source.clone(), c.mode, c.outputs.clone(), c.state))
                 .collect();
-            for (id, src, outs, state) in cells {
+            for (id, src, mode, outs, state) in cells {
                 ui.add_space(4.0);
-                let row = Arc::new(from_latex(&src));
-                ui.horizontal(|ui| {
-                    let r = maximus_render::show_math(ui, &row, size * 0.8, color.gamma_multiply(0.7));
-                    if r.on_hover_text("Click to edit this input").clicked() {
-                        recall = Some(src.clone());
-                    }
-                    if matches!(state, CellState::Running | CellState::Queued) {
-                        ui.spinner();
-                    }
+                let row = Arc::new(match mode {
+                    InputMode::Math => from_latex(&src),
+                    InputMode::Maxima => maximus_math::maxima_script_to_tree(&src).unwrap_or_else(|_| maximus_math::row_from_str(&src)),
                 });
+                let r = math_fit(ui, ("in", id), &row, size * 0.8, color.gamma_multiply(0.7), false);
+                if r.on_hover_text("Click to edit this input").clicked() {
+                    recall = Some(match mode {
+                        InputMode::Math => src.clone(),
+                        InputMode::Maxima => maximus_math::maxima_script_to_latex(&src).unwrap_or_else(|_| src.clone()),
+                    });
+                }
+                if matches!(state, CellState::Running | CellState::Queued) {
+                    ui.spinner();
+                }
                 for (k, o) in outs.iter().enumerate() {
                     match o {
                         OutputItem::Result { text, label, .. } => {
@@ -99,7 +120,7 @@ impl MaximusApp {
                             ui.with_layout(Layout::top_down(Align::Max), |ui| {
                                 match &tree {
                                     Some(t) => {
-                                        let r = maximus_render::show_math(ui, t, size * 1.15, color);
+                                        let r = math_fit(ui, ("out", id, k), t, size * 1.15, color, true);
                                         if r.on_hover_text("Click to use this result").clicked() {
                                             reuse = Some(text.clone());
                                         }
@@ -118,9 +139,18 @@ impl MaximusApp {
                 }
                 ui.separator();
             }
+            // Keep following the bottom until results have arrived and been laid out.
+            let end = ui.allocate_response(Vec2::new(1.0, 1.0), egui::Sense::hover());
             if self.min_scroll_to_end {
-                ui.scroll_to_cursor(Some(Align::BOTTOM));
-                self.min_scroll_to_end = false;
+                end.scroll_to_me(Some(Align::BOTTOM));
+                if self.session.is_busy() {
+                    self.min_scroll_frames = 6;
+                } else if self.min_scroll_frames > 0 {
+                    self.min_scroll_frames -= 1;
+                } else {
+                    self.min_scroll_to_end = false;
+                }
+                ui.ctx().request_repaint();
             }
         });
         if let Some(src) = recall {
@@ -205,7 +235,7 @@ impl MaximusApp {
             }
         });
         ui.horizontal(|ui| {
-            if ui.add_sized(Vec2::new(118.0, 34.0), egui::Button::new(RichText::new("⌫").size(17.0))).clicked() {
+            if icons::icon_button(ui, Icon::Backspace, Vec2::new(118.0, 34.0), true).clicked() {
                 self.min_editor.backspace();
             }
             if ui.add_sized(Vec2::new(118.0, 34.0), egui::Button::new(RichText::new("C").size(17.0))).clicked() {

@@ -3,6 +3,7 @@
 mod app;
 mod catalog;
 mod cells;
+mod icons;
 mod minimal;
 mod settings;
 mod side;
@@ -11,8 +12,12 @@ pub use app::{MaximusApp, Options};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn run_native(opts: Options) -> eframe::Result {
+    let mut saved = settings::Settings::load();
+    if opts.minimal {
+        saved.minimal = true;
+    }
     let native = eframe::NativeOptions {
-        viewport: eframe::egui::ViewportBuilder::default().with_inner_size([1180.0, 800.0]).with_min_inner_size([420.0, 480.0]).with_title("Maximus"),
+        viewport: eframe::egui::ViewportBuilder::default().with_inner_size(saved.size_for_mode()).with_min_inner_size([360.0, 440.0]).with_title("Maximus"),
         ..Default::default()
     };
     eframe::run_native("Maximus", native, Box::new(move |cc| Ok(Box::new(MaximusApp::new(cc, opts)))))

@@ -61,9 +61,9 @@ fn tokenize(row: &[Item]) -> Result<Vec<S>, String> {
                 continue;
             }
             Item::Char(c) if c.is_ascii_alphabetic() => {
-                let (run, j) = collect_run(row, i);
+                let (run, j, paren) = collect_run(row, i);
                 i = j;
-                for (_, _, w) in split_letters(&run) {
+                for (_, _, w) in split_letters_ctx(&run, paren) {
                     out.push(match w {
                         Word::Func(f) => S::Func(f),
                         Word::Greek(g) => S::Sym(greek_name_of_glyph(g).unwrap().to_string()),
@@ -318,7 +318,10 @@ impl<'a> Sp<'a> {
                 Some(S::Sup(r)) => {
                     let r = r.clone();
                     self.i += 1;
-                    e = Expr::Pow(Box::new(e), Box::new(self.row_expr(&r)?));
+                    e = match r.split_first() {
+                        Some((Item::Char(NC_MARK), rest)) => Expr::Bin("^^".into(), Box::new(e), Box::new(self.row_expr(rest)?)),
+                        _ => Expr::Pow(Box::new(e), Box::new(self.row_expr(&r)?)),
+                    };
                 }
                 Some(S::Op("!")) => {
                     self.i += 1;

@@ -96,7 +96,10 @@ pub fn parse_frame(line: &str) -> Option<Event> {
 
 impl NativeBackend {
     pub fn new(cfg: NativeConfig) -> Self {
-        let dir = std::env::temp_dir().join(format!("maximus-{}", std::process::id()));
+        // One directory per backend so a replaced backend never deletes the driver of its successor.
+        static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!("maximus-{}-{}", std::process::id(), n));
         let _ = std::fs::create_dir_all(&dir);
         let driver_path = dir.join("driver.lisp");
         let _ = std::fs::write(&driver_path, DRIVER);
@@ -316,6 +319,24 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         assert!(s.variables.is_empty(), "{:?}", s.variables);
+    }
+
+    #[test]
+    fn restart_gives_a_fresh_working_maxima() {
+        if !maxima_available() {
+            return;
+        }
+        let mut s = Session::new(Box::new(NativeBackend::new(NativeConfig::default())));
+        assert!(s.run_blocking("a:7$", Duration::from_secs(30)).ok);
+        s.restart();
+        let r = s.run_blocking("a;", Duration::from_secs(30));
+        assert!(r.ok, "{:?}", r);
+        assert_eq!(r.last_text(), Some("a"), "state must be gone after restart");
+        // Replacing the whole backend (as the UI does when settings change) must work too.
+        let mut s2 = Session::new(Box::new(NativeBackend::new(NativeConfig::default())));
+        s2.backend = Box::new(NativeBackend::new(NativeConfig::default()));
+        let r = s2.run_blocking("1+1;", Duration::from_secs(30));
+        assert_eq!(r.last_text(), Some("2"), "{:?}", r);
     }
 
     #[test]

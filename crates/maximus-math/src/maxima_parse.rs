@@ -75,7 +75,7 @@ fn lex(src: &str) -> Result<Vec<T>, String> {
             if three == "::=" {
                 out.push(T::Op(three));
                 i += 3;
-            } else if ["<=", ">=", ":=", "::", "**", "!!", "-\u{3e}", "#="].contains(&two.as_str()) && two != "#=" {
+            } else if ["<=", ">=", ":=", "::", "**", "!!", "^^", "-\u{3e}", "#="].contains(&two.as_str()) && two != "#=" {
                 out.push(T::Op(if two == "**" { "^".into() } else { two }));
                 i += 2;
             } else if "+-*/^=<>:()[]{},;$#!.'|".contains(ch) {
@@ -124,7 +124,7 @@ impl P {
         };
         let (l, r) = match name.as_str() {
             ":" | ":=" | "::" | "::=" => (180, 20),
-            "^" => (140, 139),
+            "^" | "^^" => (140, 139),
             "." => (130, 130),
             "*" | "/" => (120, 120),
             "+" | "-" => (100, 100),
@@ -247,6 +247,57 @@ impl P {
             }
         }
     }
+}
+
+/// Splits a Maxima script into `(statement, terminator)` pairs at top-level `;` and `$`.
+/// Comments are dropped; a missing final terminator yields `;`.
+pub fn split_statements(src: &str) -> Vec<(String, char)> {
+    let c: Vec<char> = src.chars().collect();
+    let (mut out, mut cur, mut depth, mut i) = (Vec::new(), String::new(), 0i32, 0);
+    while i < c.len() {
+        match c[i] {
+            '/' if c.get(i + 1) == Some(&'*') => {
+                i += 2;
+                while i + 1 < c.len() && !(c[i] == '*' && c[i + 1] == '/') {
+                    i += 1;
+                }
+                i += 1;
+            }
+            '"' => {
+                cur.push('"');
+                i += 1;
+                while i < c.len() && c[i] != '"' {
+                    if c[i] == '\\' && i + 1 < c.len() {
+                        cur.push(c[i]);
+                        i += 1;
+                    }
+                    cur.push(c[i]);
+                    i += 1;
+                }
+                cur.push('"');
+            }
+            '(' | '[' | '{' => {
+                depth += 1;
+                cur.push(c[i]);
+            }
+            ')' | ']' | '}' => {
+                depth -= 1;
+                cur.push(c[i]);
+            }
+            t @ (';' | '$') if depth <= 0 => {
+                if !cur.trim().is_empty() {
+                    out.push((std::mem::take(&mut cur).trim().to_string(), t));
+                }
+                cur.clear();
+            }
+            ch => cur.push(ch),
+        }
+        i += 1;
+    }
+    if !cur.trim().is_empty() {
+        out.push((cur.trim().to_string(), ';'));
+    }
+    out
 }
 
 /// Parses a single Maxima expression (no trailing terminator required).

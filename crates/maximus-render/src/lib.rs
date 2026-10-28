@@ -13,8 +13,11 @@ use std::sync::Arc;
 
 pub use layout::{Mark, Path};
 
-const ROMAN: &[u8] = include_bytes!("../assets/DejaVuSans.ttf");
-const ITALIC: &[u8] = include_bytes!("../assets/DejaVuSans-Oblique.ttf");
+const LM_ROMAN: &[u8] = include_bytes!("../assets/lmroman10-regular.otf");
+const LM_ITALIC: &[u8] = include_bytes!("../assets/lmroman10-italic.otf");
+const LM_MATH: &[u8] = include_bytes!("../assets/latinmodern-math.otf");
+const SERIF_ITALIC: &[u8] = include_bytes!("../assets/LiberationSerif-Italic.ttf");
+const DEJAVU: &[u8] = include_bytes!("../assets/DejaVuSans.ttf");
 
 pub fn roman_family() -> FontFamily {
     FontFamily::Name("math".into())
@@ -24,14 +27,16 @@ pub fn italic_family() -> FontFamily {
     FontFamily::Name("math-italic".into())
 }
 
-/// Registers the math fonts. Call once at startup.
+/// Registers the math fonts (Latin Modern, as used by LaTeX). Call once at startup.
 pub fn install_fonts(ctx: &Context) {
     let mut fonts = FontDefinitions::default();
-    fonts.font_data.insert("dejavu".into(), Arc::new(FontData::from_static(ROMAN)));
-    fonts.font_data.insert("dejavu-italic".into(), Arc::new(FontData::from_static(ITALIC)));
-    fonts.families.insert(roman_family(), vec!["dejavu".into()]);
-    fonts.families.insert(italic_family(), vec!["dejavu-italic".into(), "dejavu".into()]);
-    // DejaVu also serves as a fallback for symbols missing in the default fonts.
+    for (name, data) in [("lm-roman", LM_ROMAN), ("lm-italic", LM_ITALIC), ("lm-math", LM_MATH), ("serif-italic", SERIF_ITALIC), ("dejavu", DEJAVU)] {
+        fonts.font_data.insert(name.into(), Arc::new(FontData::from_static(data)));
+    }
+    fonts.families.insert(roman_family(), vec!["lm-roman".into(), "lm-math".into(), "dejavu".into()]);
+    // Liberation Serif Italic supplies italic Greek, which Latin Modern Roman lacks.
+    fonts.families.insert(italic_family(), vec!["lm-italic".into(), "serif-italic".into(), "lm-math".into(), "dejavu".into()]);
+    // DejaVu also serves as a fallback for symbols missing in the default UI fonts.
     for fam in [FontFamily::Proportional, FontFamily::Monospace] {
         fonts.families.get_mut(&fam).unwrap().push("dejavu".into());
     }

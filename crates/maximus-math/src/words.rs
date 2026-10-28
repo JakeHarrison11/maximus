@@ -130,7 +130,7 @@ fn registry() -> &'static RwLock<HashSet<String>> {
 pub fn register_functions<I: IntoIterator<Item = String>>(names: I) {
     let mut r = registry().write().unwrap();
     for n in names {
-        if n.chars().count() >= 4 && n.chars().all(|c| c.is_ascii_alphanumeric()) && n.starts_with(|c: char| c.is_ascii_alphabetic()) {
+        if n.chars().count() >= 2 && n.chars().all(|c| c.is_ascii_alphanumeric()) && n.starts_with(|c: char| c.is_ascii_alphabetic()) {
             r.insert(n);
         }
     }
@@ -152,6 +152,13 @@ pub enum Word {
 
 /// Splits a run of ascii letters/digits into words, preferring the longest match at each position.
 pub fn split_letters(run: &[char]) -> Vec<(usize, usize, Word)> {
+    split_letters_ctx(run, false)
+}
+
+/// Like [`split_letters`]; `paren_after` says the run is directly followed by `(`.
+/// Registered names shorter than four letters (`ilt`, `ev`) only count as functions when
+/// they end the run and a parenthesis follows, so ordinary products like `at` stay products.
+pub fn split_letters_ctx(run: &[char], paren_after: bool) -> Vec<(usize, usize, Word)> {
     let reg = registry().read().unwrap();
     let mut out = Vec::new();
     let mut i = 0;
@@ -173,13 +180,17 @@ pub fn split_letters(run: &[char]) -> Vec<(usize, usize, Word)> {
             }
         }
         let max = rest.len().min(40);
-        for len in (4..=max).rev() {
-            if rest.is_char_boundary(len) && reg.contains(&rest[..len]) {
-                if best.as_ref().map_or(true, |(l, _)| len > *l) {
-                    best = Some((len, Word::Func(rest[..len].to_string())));
-                }
-                break;
+        for len in (2..=max).rev() {
+            if !rest.is_char_boundary(len) || !reg.contains(&rest[..len]) {
+                continue;
             }
+            if len < 4 && !(paren_after && len == rest.len()) {
+                continue;
+            }
+            if best.as_ref().map_or(true, |(l, _)| len > *l) {
+                best = Some((len, Word::Func(rest[..len].to_string())));
+            }
+            break;
         }
         for (n, g, _) in GREEK {
             if rest.starts_with(n) && best.as_ref().map_or(true, |(l, _)| n.len() > *l) {
@@ -205,7 +216,7 @@ pub fn split_letters(run: &[char]) -> Vec<(usize, usize, Word)> {
 
 /// Collects the maximal run of ascii letters/digits starting at `start` in `row` (a letter must start it).
 /// A trailing digit group that is the integer part of a decimal number is left out.
-pub fn collect_run(row: &[crate::tree::Item], start: usize) -> (Vec<char>, usize) {
+pub fn collect_run(row: &[crate::tree::Item], start: usize) -> (Vec<char>, usize, bool) {
     use crate::tree::Item;
     let mut run = Vec::new();
     let mut j = start;
@@ -223,5 +234,6 @@ pub fn collect_run(row: &[crate::tree::Item], start: usize) -> (Vec<char>, usize
             j -= 1;
         }
     }
-    (run, j)
+    let paren = matches!(row.get(j), Some(crate::tree::Item::Group('(', _, _)));
+    (run, j, paren)
 }

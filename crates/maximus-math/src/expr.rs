@@ -65,6 +65,7 @@ fn prec(e: &Expr) -> u8 {
             "or" => P_OR,
             "and" => P_AND,
             "." => P_DOT,
+            "^^" => P_POW,
             _ => P_REL,
         },
     }
@@ -332,6 +333,13 @@ fn disp_inner(e: &Expr) -> Row {
         Expr::Index(a, idx) => {
             let mut r = disp(a, P_ATOM);
             r.push(Item::Group('[', ']', join_commas(idx)));
+            r
+        }
+        Expr::Bin(op, a, b) if op == "^^" => {
+            let mut r = disp(a, P_POW + 1);
+            let mut sup = vec![Item::Char(NC_MARK)];
+            sup.extend(disp(b, 0));
+            r.push(Item::Sup(sup));
             r
         }
         Expr::Bin(op, a, b) => {

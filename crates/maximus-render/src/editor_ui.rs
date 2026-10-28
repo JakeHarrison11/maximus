@@ -13,6 +13,8 @@ pub struct EditorOutput {
     pub help_word: Option<String>,
     /// Set when the user right-clicked; `help_word` then refers to the clicked position.
     pub secondary_clicked: bool,
+    /// Backspace was pressed while the editor was already empty.
+    pub backspace_on_empty: bool,
 }
 
 pub struct EditorStyle {
@@ -43,6 +45,7 @@ pub fn math_editor(ui: &mut egui::Ui, id: Id, state: &mut EditorState, style: &E
     let mut changed = false;
     let mut submit = false;
     let mut secondary = false;
+    let mut backspace_on_empty = false;
 
     let origin = |b: &crate::layout::Boxed| Pos2::new(rect.min.x + pad, rect.center().y + (b.asc - b.desc) / 2.0);
 
@@ -55,6 +58,9 @@ pub fn math_editor(ui: &mut egui::Ui, id: Id, state: &mut EditorState, style: &E
         secondary = resp.secondary_clicked();
     }
 
+    if resp.hovered() {
+        ctx.set_cursor_icon(egui::CursorIcon::Text);
+    }
     let focused = ctx.memory(|m| m.has_focus(rect_id));
     if focused {
         ctx.memory_mut(|m| {
@@ -79,7 +85,12 @@ pub fn math_editor(ui: &mut egui::Ui, id: Id, state: &mut EditorState, style: &E
                     state.clear();
                 }
                 Event::Key { key, pressed: true, modifiers, .. } => match key {
-                    Key::Backspace => state.backspace(),
+                    Key::Backspace => {
+                        if state.row.is_empty() {
+                            backspace_on_empty = true;
+                        }
+                        state.backspace()
+                    }
                     Key::Delete => state.delete_forward(),
                     Key::ArrowLeft => {
                         state.move_horizontal(&b.marks, -1);
@@ -160,13 +171,25 @@ pub fn math_editor(ui: &mut egui::Ui, id: Id, state: &mut EditorState, style: &E
     }
 
     let help_word = if focused || secondary { state.help_word() } else { None };
-    EditorOutput { response: resp, changed, submit, focused, help_word, secondary_clicked: secondary }
+    EditorOutput { response: resp, changed, submit, focused, help_word, secondary_clicked: secondary, backspace_on_empty }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use egui::{Context, Modifiers, RawInput};
+
+    fn frame_out(ctx: &Context, state: &mut EditorState, id: Id, events: Vec<Event>) -> bool {
+        let mut flag = false;
+        let mut raw = RawInput::default();
+        raw.screen_rect = Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0)));
+        raw.events = events;
+        let mut out = ctx.run_ui(raw, |ui| {
+            flag |= math_editor(ui, id, state, &EditorStyle::new(20.0, Color32::WHITE)).backspace_on_empty;
+        });
+        out.textures_delta.clear();
+        flag
+    }
 
     fn frame(ctx: &Context, state: &mut EditorState, id: Id, events: Vec<Event>) -> bool {
         let mut raw = RawInput::default();
@@ -203,5 +226,20 @@ mod tests {
         assert_eq!(st.latex(), "\\frac{1}{2}+x^{}");
         frame(&ctx, &mut st, id, vec![key(Key::Backspace)]);
         assert_eq!(st.latex(), "\\frac{1}{2}+x");
+    }
+
+    #[test]
+    fn backspace_in_empty_editor_is_reported() {
+        let ctx = Context::default();
+        crate::install_fonts(&ctx);
+        let id = Id::unique("ed2");
+        let mut st = EditorState::default();
+        frame(&ctx, &mut st, id, vec![]);
+        ctx.memory_mut(|m| m.request_focus(id));
+        frame(&ctx, &mut st, id, vec![]);
+        let bs = Event::Key { key: Key::Backspace, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE };
+        assert!(frame_out(&ctx, &mut st, id, vec![bs.clone()]));
+        frame(&ctx, &mut st, id, vec![Event::Text("x".into())]);
+        assert!(!frame_out(&ctx, &mut st, id, vec![bs]), "not empty: plain deletion");
     }
 }

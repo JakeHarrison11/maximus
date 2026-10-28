@@ -175,6 +175,9 @@ impl EditorState {
                 self.cur.pos = start;
                 self.enter(start, 1, 0);
             }
+            '^' if self.cur.pos == 0 && self.in_empty_sup() => {
+                self.put(Item::Char(maximus_math::NC_MARK));
+            }
             '^' => {
                 let pos = self.cur.pos;
                 self.cur_row().insert(pos, Item::Sup(vec![]));
@@ -249,6 +252,14 @@ impl EditorState {
         }
     }
 
+    fn in_empty_sup(&mut self) -> bool {
+        let Some((i, _)) = self.cur.path.last().copied() else { return false };
+        let mut parent = self.cur.path.clone();
+        parent.pop();
+        let in_sup = row_at(&mut self.row, &parent).map_or(false, |r| matches!(r.get(i), Some(Item::Sup(_))));
+        in_sup && self.cur_row().is_empty()
+    }
+
     fn enclosing_group_open(&mut self) -> Option<char> {
         let (i, _) = *self.cur.path.last()?;
         let mut path = self.cur.path.clone();
@@ -281,14 +292,29 @@ impl EditorState {
         false
     }
 
+    /// Replaces the group at `idx` in the row at `path` by its content; returns the content length.
+    fn unwrap_group(&mut self, path: &[(usize, usize)], idx: usize) -> usize {
+        let Some(row) = row_at(&mut self.row, path) else { return 0 };
+        let Item::Group(_, _, body) = row.remove(idx) else { return 0 };
+        let n = body.len();
+        row.splice(idx..idx, body);
+        n
+    }
+
     pub fn backspace(&mut self) {
         self.clamp();
         let pos = self.cur.pos;
         if pos == 0 {
-            // At the start of a slot: remove the owning item if everything in it is empty, else step out.
+            // At the start of a slot: dissolve a bracket pair, remove an empty structure, or step out.
             if let Some((i, _)) = self.cur.path.last().copied() {
                 let mut path = self.cur.path.clone();
                 path.pop();
+                let is_group = row_at(&mut self.row, &path).map_or(false, |r| matches!(r.get(i), Some(Item::Group(..))));
+                if is_group {
+                    self.unwrap_group(&path, i);
+                    self.cur = Cursor { path, pos: i };
+                    return;
+                }
                 let empty = row_at(&mut self.row, &path).and_then(|r| r.get_mut(i)).map_or(false, item_all_empty);
                 if empty {
                     row_at(&mut self.row, &path).unwrap().remove(i);
@@ -297,11 +323,16 @@ impl EditorState {
             }
             return;
         }
+        let path = self.cur.path.clone();
         let r = self.cur_row();
         match &mut r[pos - 1] {
             Item::Char(_) | Item::Func(_) | Item::Text(_) => {
                 r.remove(pos - 1);
                 self.cur.pos = pos - 1;
+            }
+            Item::Group(..) => {
+                let n = self.unwrap_group(&path, pos - 1);
+                self.cur.pos = pos - 1 + n;
             }
             item => {
                 if item_all_empty(item) {
@@ -321,13 +352,27 @@ impl EditorState {
     pub fn delete_forward(&mut self) {
         self.clamp();
         let pos = self.cur.pos;
+        let path = self.cur.path.clone();
         let r = self.cur_row();
         if pos >= r.len() {
+            // At the end of a bracket pair: dissolve it.
+            if let Some((i, _)) = path.last().copied() {
+                let mut parent = path.clone();
+                parent.pop();
+                let is_group = row_at(&mut self.row, &parent).map_or(false, |r| matches!(r.get(i), Some(Item::Group(..))));
+                if is_group {
+                    let n = self.unwrap_group(&parent, i);
+                    self.cur = Cursor { path: parent, pos: i + n };
+                }
+            }
             return;
         }
         match &mut r[pos] {
             Item::Char(_) | Item::Func(_) | Item::Text(_) => {
                 r.remove(pos);
+            }
+            Item::Group(..) => {
+                self.unwrap_group(&path, pos);
             }
             item => {
                 if item_all_empty(item) {
@@ -516,7 +561,7 @@ impl EditorState {
 
     /// The Maxima function the cursor is on or inside the arguments of, for contextual help.
     pub fn help_word(&mut self) -> Option<String> {
-        use maximus_math::words::{split_letters, Word};
+        use maximus_math::words::Word;
         fn letters_before(r: &[Item], end: usize) -> Option<String> {
             // The last function word in the run of letters/function items ending at `end`.
             let mut start = end;
@@ -526,7 +571,8 @@ impl EditorState {
             if start < end {
                 let run: Vec<char> = r[start..end].iter().filter_map(|i| if let Item::Char(c) = i { Some(*c) } else { None }).collect();
                 let all = run.iter().collect::<String>();
-                let words = split_letters(&run);
+                let paren = matches!(r.get(end), Some(Item::Group('(', _, _)));
+                let words = maximus_math::words::split_letters_ctx(&run, paren);
                 if let Some((_, _, Word::Func(f))) = words.last() {
                     return Some(f.clone());
                 }
@@ -664,6 +710,30 @@ mod tests {
         let mut e = EditorState::default();
         e.paste("\\frac{a}{b}");
         assert!(matches!(e.row[0], Item::Frac(..)));
+    }
+
+    #[test]
+    fn deleting_brackets_with_content() {
+        let mut e = typed("(ab)+c");
+        // Cursor after `c`; move to just after the group and backspace: the pair dissolves.
+        e.cur = Cursor { path: vec![], pos: 1 };
+        e.backspace();
+        assert_eq!(e.latex(), "ab+c");
+        let mut e = typed("(ab");
+        e.cur = Cursor { path: vec![(0, 0)], pos: 0 };
+        e.backspace();
+        assert_eq!(e.latex(), "ab");
+        let mut e = typed("(ab");
+        e.delete_forward();
+        assert_eq!(e.latex(), "(ab)".replace("(", "").replace(")", ""));
+    }
+
+    #[test]
+    fn double_caret_marks_noncommutative_power() {
+        let mut e = typed("A^^");
+        e.type_text("-1");
+        let m = maximus_math::tree_to_maxima(&e.row, &Default::default()).unwrap();
+        assert_eq!(m, "A^^(-1);");
     }
 
     #[test]

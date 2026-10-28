@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 
 pub type Row = Vec<Item>;
 
+/// Marks a superscript as Maxima's non-commutative power `^^` (hidden when drawn).
+pub const NC_MARK: char = '\u{2063}';
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BigOp {
     /// Definite integral (limit slots).
@@ -63,6 +66,7 @@ fn push_cmd(out: &mut String, cmd: &str) {
 
 fn char_to_latex(c: char, out: &mut String) {
     match c {
+        NC_MARK => push_cmd(out, "wedge"),
         '·' => push_cmd(out, "cdot"),
         '×' => push_cmd(out, "times"),
         '÷' => push_cmd(out, "div"),
@@ -105,8 +109,8 @@ fn write_row(row: &[Item], out: &mut String) {
     while i < row.len() {
         match &row[i] {
             Item::Char(c) if c.is_ascii_alphabetic() => {
-                let (run, j) = collect_run(row, i);
-                for (_, _, w) in split_letters(&run) {
+                let (run, j, paren) = collect_run(row, i);
+                for (_, _, w) in split_letters_ctx(&run, paren) {
                     match w {
                         Word::Func(f) => match maxima_func_to_latex(&f) {
                             Some(l) => push_cmd(out, l),
@@ -544,7 +548,10 @@ fn push_text_content(content: &str, out: &mut Row) {
     }
 }
 
-fn attach_script(out: &mut Row, sup: bool, r: Row) {
+fn attach_script(out: &mut Row, sup: bool, mut r: Row) {
+    if sup && matches!(r.first(), Some(Item::Char('∧'))) {
+        r[0] = Item::Char(NC_MARK);
+    }
     // A script on `\prime`-like empties is dropped; otherwise it is its own item.
     if sup {
         out.push(Item::Sup(r));

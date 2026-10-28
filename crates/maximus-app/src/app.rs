@@ -1,6 +1,8 @@
 //! The Maximus application: state, frame loop, menus and panels.
 
 use crate::catalog::{self, CallTemplate, Category, PaletteGroup};
+use crate::icons::{self, Icon};
+pub use crate::settings::SideTab;
 use crate::settings::{self, PlotBackend, Settings};
 use eframe::egui;
 use egui::{Color32, Key, Modifiers, RichText};
@@ -23,13 +25,6 @@ pub enum Insert {
     Call { text: String, evaluate: bool, pre: Option<String> },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SideTab {
-    Help,
-    Variables,
-    Symbols,
-    Functions,
-}
 
 pub struct CellUi {
     pub editor: EditorState,
@@ -98,6 +93,10 @@ pub struct MaximusApp {
     pub manual_cats: Vec<(String, Vec<(String, Option<String>)>)>,
     pub run_on_start: bool,
     pub show_keypad: bool,
+    pub last_mode: bool,
+    pub resize_hold_until: f64,
+    pub size_dirty_since: Option<f64>,
+    pub min_scroll_frames: u32,
 }
 
 impl MaximusApp {
@@ -118,6 +117,8 @@ impl MaximusApp {
 
         let help = HelpIndex::load_system();
         maximus_math::words::register_functions(help.entries.iter().filter(|e| e.is_function()).map(|e| e.name.clone()));
+        let init_tab = settings.side_tab;
+        let last_mode = settings.minimal;
         let session = Session::new(make_backend(&settings));
         let mut app = MaximusApp {
             settings,
@@ -129,7 +130,7 @@ impl MaximusApp {
             active_cell: None,
             focus_cell: None,
             pending: Vec::new(),
-            tab: SideTab::Help,
+            tab: init_tab,
             help_topic: Some("integrate".into()),
             help_search: String::new(),
             func_search: String::new(),
@@ -154,6 +155,10 @@ impl MaximusApp {
             manual_cats: Vec::new(),
             run_on_start: opts.run_all,
             show_keypad: true,
+            last_mode,
+            resize_hold_until: 0.0,
+            size_dirty_since: None,
+            min_scroll_frames: 0,
         };
         app.manual_cats = app
             .help
@@ -400,6 +405,42 @@ impl MaximusApp {
         let busy = self.session.is_busy() || !self.session.ready && self.session.last_error.is_none();
         if busy {
             ctx.request_repaint_after(std::time::Duration::from_millis(40));
+        }
+    }
+
+    /// Switches the window to the remembered size of the active mode and remembers manual resizes.
+    fn manage_window(&mut self, ctx: &egui::Context) {
+        let now = ctx.input(|i| i.time);
+        if self.tab != self.settings.side_tab {
+            self.settings.side_tab = self.tab;
+            self.settings.save();
+        }
+        if self.settings.minimal != self.last_mode {
+            self.last_mode = self.settings.minimal;
+            let [w, h] = self.settings.size_for_mode();
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, h)));
+            self.resize_hold_until = now + 0.8;
+            self.settings.save();
+            return;
+        }
+        if now < self.resize_hold_until {
+            return;
+        }
+        if let Some(r) = ctx.input(|i| i.viewport().inner_rect) {
+            let size = [r.width().round(), r.height().round()];
+            let slot = if self.settings.minimal { &mut self.settings.minimal_size } else { &mut self.settings.full_size };
+            if (slot[0] - size[0]).abs() >= 1.0 || (slot[1] - size[1]).abs() >= 1.0 {
+                *slot = size;
+                self.size_dirty_since = Some(now);
+            }
+        }
+        if let Some(t) = self.size_dirty_since {
+            if now - t > 1.0 {
+                self.settings.save();
+                self.size_dirty_since = None;
+            } else {
+                ctx.request_repaint_after(std::time::Duration::from_millis(500));
+            }
         }
     }
 
@@ -651,10 +692,10 @@ impl MaximusApp {
 
     fn toolbar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            if ui.button("▶ Evaluate all").clicked() {
+            if icons::icon_label_button(ui, Icon::Play, "Evaluate all", true).clicked() {
                 self.session.evaluate_all();
             }
-            if ui.add_enabled(self.session.is_busy(), egui::Button::new("■ Stop")).clicked() {
+            if icons::icon_label_button(ui, Icon::Stop, "Stop", self.session.is_busy()).clicked() {
                 self.session.interrupt();
             }
             ui.separator();
@@ -679,14 +720,14 @@ impl MaximusApp {
         ui.horizontal(|ui| {
             match self.session.backend.status() {
                 BackendStatus::Ready => {
-                    ui.colored_label(Color32::from_rgb(0x4c, 0xaf, 0x50), "● Maxima ready");
+                    icons::status_dot(ui, Color32::from_rgb(0x4c, 0xaf, 0x50), "Maxima ready");
                 }
                 BackendStatus::Starting => {
                     ui.spinner();
                     ui.label("Starting Maxima…");
                 }
                 BackendStatus::Dead(m) => {
-                    ui.colored_label(Color32::from_rgb(0xe5, 0x39, 0x35), "● Maxima not running");
+                    icons::status_dot(ui, Color32::from_rgb(0xe5, 0x39, 0x35), "Maxima not running");
                     ui.label(RichText::new(m).small());
                     if ui.button("Restart").clicked() {
                         self.restart_backend();
@@ -920,6 +961,7 @@ impl eframe::App for MaximusApp {
             self.session.evaluate_all();
         }
         self.shortcuts(&ctx);
+        self.manage_window(&ctx);
         let now = ctx.input(|i| i.time);
         self.autosave(now);
         for ins in std::mem::take(&mut self.pending) {
@@ -941,7 +983,12 @@ impl eframe::App for MaximusApp {
             egui::CentralPanel::default().show(ui, |ui| self.minimal_ui(ui));
         } else {
             if self.settings.side_panel {
-                egui::Panel::right("side").resizable(true).default_size(340.0).min_size(240.0).show(ui, |ui| self.side_panel(ui));
+                let max_w = (ctx.content_rect().width() * 0.42).max(240.0);
+                egui::Panel::right("side")
+                    .resizable(true)
+                    .default_size(340.0_f32.min(max_w))
+                    .size_range(240.0_f32.min(max_w)..=max_w)
+                    .show(ui, |ui| self.side_panel(ui));
             }
             egui::CentralPanel::default().show(ui, |ui| self.notebook_ui(ui));
         }

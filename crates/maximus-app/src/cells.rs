@@ -1,6 +1,7 @@
 //! Notebook view: cells, inputs and outputs.
 
 use crate::app::*;
+use crate::icons::{self, Icon};
 use crate::settings::PlotBackend;
 use eframe::egui;
 use egui::{Color32, Key, Modifiers, RichText};
@@ -12,6 +13,8 @@ pub enum CellAction {
     Run(u64),
     RunThrough(u64),
     Delete(u64),
+    /// Backspace in an empty cell: delete it and move to the previous cell.
+    DeleteBack(u64),
     Up(u64),
     Down(u64),
     Duplicate(u64),
@@ -23,6 +26,7 @@ pub enum CellAction {
 }
 
 const RED: Color32 = Color32::from_rgb(0xe5, 0x39, 0x35);
+const GREEN: Color32 = Color32::from_rgb(0x4c, 0xaf, 0x50);
 
 impl MaximusApp {
     pub fn notebook_ui(&mut self, ui: &mut egui::Ui) {
@@ -60,6 +64,19 @@ impl MaximusApp {
                 if nb.cells.is_empty() {
                     let n = nb.add_cell(CellKind::Code, InputMode::Math);
                     self.focus_cell = Some(n);
+                }
+            }
+            CellAction::DeleteBack(id) => {
+                let Some(i) = nb.index_of(id) else { return };
+                if nb.cells.len() > 1 {
+                    nb.remove(id);
+                    self.cell_ui.remove(&id);
+                    let target = nb.cells[i.saturating_sub(1).min(nb.cells.len() - 1)].id;
+                    self.focus_cell = Some(target);
+                    self.active_cell = Some(target);
+                    if let Some(cu) = self.cell_ui.get_mut(&target) {
+                        cu.editor.cur = maximus_render::editor::Cursor { path: vec![], pos: cu.editor.row.len() };
+                    }
                 }
             }
             CellAction::Up(id) => nb.move_up(id),
@@ -116,7 +133,13 @@ impl MaximusApp {
                     return;
                 }
             },
-            InputMode::Math => maximus_math::maxima_to_latex(cell.source.trim().trim_end_matches([';', '$'])).unwrap_or_else(|_| cell.source.clone()),
+            InputMode::Math => match maximus_math::maxima_script_to_latex(&cell.source) {
+                Ok(l) => l,
+                Err(e) => {
+                    self.messages.push(format!("Cannot convert to textbook input: {}", e));
+                    return;
+                }
+            },
         };
         let c = self.session.notebook.cell_mut(id).unwrap();
         c.source = new_source;
@@ -145,7 +168,7 @@ impl MaximusApp {
                     ui.set_min_width(ui.available_width());
                     match kind {
                         CellKind::Code => self.code_cell(ui, idx, id, collapsed, actions),
-                        _ => self.prose_cell(ui, idx, id, kind),
+                        _ => self.prose_cell(ui, idx, id, kind, actions),
                     }
                 });
             });
@@ -161,23 +184,25 @@ impl MaximusApp {
         match kind {
             CellKind::Code => {
                 let n = self.session.notebook.cells[..=idx].iter().filter(|c| c.kind == CellKind::Code).count();
-                ui.label(RichText::new(format!("In {}", n)).small().weak());
-                match state {
-                    CellState::Running => {
-                        ui.spinner();
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 3.0;
+                    ui.label(RichText::new(format!("In {}", n)).small().weak());
+                    let (rect, _) = ui.allocate_exact_size(egui::vec2(13.0, 13.0), egui::Sense::hover());
+                    match state {
+                        CellState::Running => {
+                            ui.put(rect, egui::Spinner::new().size(11.0));
+                        }
+                        CellState::Queued => {
+                            for dx in [-3.5, 0.0, 3.5] {
+                                ui.painter().circle_filled(egui::pos2(rect.center().x + dx, rect.center().y), 1.2, ui.visuals().weak_text_color());
+                            }
+                        }
+                        CellState::Failed => icons::draw_icon(ui, Icon::Cross, rect.center(), 11.0, RED),
+                        CellState::Done => icons::draw_icon(ui, Icon::Check, rect.center(), 11.0, GREEN),
+                        CellState::Idle => {}
                     }
-                    CellState::Queued => {
-                        ui.label(RichText::new("queued").small().weak());
-                    }
-                    CellState::Failed => {
-                        ui.colored_label(RED, "✗");
-                    }
-                    CellState::Done => {
-                        ui.label(RichText::new("✓").weak());
-                    }
-                    CellState::Idle => {}
-                }
-                if ui.small_button("▶").on_hover_text("Evaluate").clicked() {
+                });
+                if icons::icon_button(ui, Icon::Play, egui::vec2(24.0, 22.0), true).on_hover_text("Evaluate").clicked() {
                     actions.push(CellAction::Run(id));
                 }
             }
@@ -191,7 +216,8 @@ impl MaximusApp {
                 ui.label(RichText::new("Title").small().weak());
             }
         }
-        ui.menu_button("⋮", |ui| {
+        let menu_btn = icons::icon_button(ui, Icon::Dots, egui::vec2(24.0, 22.0), true);
+        egui::Popup::menu(&menu_btn).show(|ui| {
             if kind == CellKind::Code {
                 let mode = self.session.notebook.cells[idx].mode;
                 if ui.selectable_label(mode == InputMode::Math && !self.cell_ui.get(&id).map_or(false, |c| c.latex_view), "Textbook input").clicked() {
@@ -252,7 +278,7 @@ impl MaximusApp {
         });
     }
 
-    fn prose_cell(&mut self, ui: &mut egui::Ui, idx: usize, id: u64, kind: CellKind) {
+    fn prose_cell(&mut self, ui: &mut egui::Ui, idx: usize, id: u64, kind: CellKind, actions: &mut Vec<CellAction>) {
         let font = match kind {
             CellKind::Title => egui::FontId::proportional(28.0),
             CellKind::Section => egui::FontId::proportional(21.0),
@@ -268,9 +294,16 @@ impl MaximusApp {
             CellKind::Section => "Section heading",
             _ => "Notes…",
         };
+        let empty_back = self.session.notebook.cells.len() > 1
+            && self.session.notebook.cells[idx].source.is_empty()
+            && ui.memory(|m| m.has_focus(eid))
+            && ui.input(|i| i.key_pressed(Key::Backspace));
+        if empty_back {
+            actions.push(CellAction::DeleteBack(id));
+        }
         let c = &mut self.session.notebook.cells[idx];
         let te = if kind == CellKind::Text { egui::TextEdit::multiline(&mut c.source).desired_rows(1) } else { egui::TextEdit::singleline(&mut c.source) };
-        let r = ui.add(te.id(eid).font(font).hint_text(hint).desired_width(f32::INFINITY).frame(egui::Frame::NONE));
+        let r = ui.add(te.id(eid).font(font).hint_text(hint).desired_width(ui.available_width()).frame(egui::Frame::NONE));
         if r.has_focus() {
             self.active_cell = Some(id);
         }
@@ -295,8 +328,15 @@ impl MaximusApp {
             if ui.memory(|m| m.has_focus(eid)) {
                 submit = ui.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::Enter));
             }
+            let empty_back = self.session.notebook.cells.len() > 1
+                && self.session.notebook.cells[idx].source.is_empty()
+                && ui.memory(|m| m.has_focus(eid))
+                && ui.input(|i| i.key_pressed(Key::Backspace));
+            if empty_back {
+                actions.push(CellAction::DeleteBack(id));
+            }
             let src = &mut self.session.notebook.cells[idx].source;
-            let out = egui::TextEdit::multiline(src).id(eid).code_editor().desired_rows(1).desired_width(f32::INFINITY).hint_text(hint).show(ui);
+            let out = egui::TextEdit::multiline(src).id(eid).code_editor().desired_rows(1).desired_width(ui.available_width()).hint_text(hint).show(ui);
             focused = out.response.has_focus();
             if focused {
                 if let Some(cr) = out.cursor_range {
@@ -309,7 +349,7 @@ impl MaximusApp {
         } else {
             let size = self.settings.math_size;
             let mut style = EditorStyle::new(size, text_color);
-            style.hint = "Type math here — e.g. 1/2 for a fraction, x^2, sqrt(x), integrate(x*sin(x), x)".into();
+            style.hint = "Type math here".into();
             let cu = self.cell_ui.get_mut(&id).unwrap();
             let out = math_editor(ui, eid, &mut cu.editor, &style);
             if out.changed {
@@ -318,6 +358,9 @@ impl MaximusApp {
             }
             focused = out.focused;
             submit = out.submit;
+            if out.backspace_on_empty && self.session.notebook.cells.len() > 1 {
+                actions.push(CellAction::DeleteBack(id));
+            }
             word = out.help_word.clone();
             if out.secondary_clicked {
                 if let Some(w) = &word {

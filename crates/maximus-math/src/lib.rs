@@ -8,9 +8,9 @@ pub mod tree;
 pub mod words;
 
 pub use expr::{expr_to_tree, to_maxima, to_maxima_with, Expr, PrintOpts};
-pub use maxima_parse::parse_maxima;
+pub use maxima_parse::{parse_maxima, split_statements};
 pub use semantic::{parse_tree, ParseCtx, Stmt};
-pub use tree::{closer_of, from_latex, row_from_str, row_to_latex, BigOp, Item, Row};
+pub use tree::{closer_of, NC_MARK, from_latex, row_from_str, row_to_latex, BigOp, Item, Row};
 
 /// Converts a textbook tree to a Maxima script (statements terminated with `;` or `$`).
 pub fn tree_to_maxima(row: &[Item], ctx: &ParseCtx) -> Result<String, String> {
@@ -31,6 +31,21 @@ pub fn latex_to_maxima(latex: &str, ctx: &ParseCtx) -> Result<String, String> {
 /// Converts a Maxima expression string (as printed by `string()`) to a display tree.
 pub fn maxima_to_tree(src: &str) -> Result<Row, String> {
     Ok(expr_to_tree(&parse_maxima(src)?))
+}
+
+/// Converts a Maxima script (several statements, `;`/`$` terminators, comments) to a display tree.
+pub fn maxima_script_to_tree(src: &str) -> Result<Row, String> {
+    let mut out: Row = Vec::new();
+    for (stmt, term) in split_statements(src) {
+        out.extend(maxima_to_tree(&stmt).map_err(|e| format!("{} (in `{}`)", e, stmt))?);
+        out.push(Item::Char(term));
+    }
+    Ok(out)
+}
+
+/// Converts a Maxima script to LaTeX.
+pub fn maxima_script_to_latex(src: &str) -> Result<String, String> {
+    Ok(row_to_latex(&maxima_script_to_tree(src)?))
 }
 
 /// Converts a Maxima expression string to LaTeX.
@@ -112,6 +127,22 @@ mod tests {
     }
 
     #[test]
+    fn maxima_script_roundtrips_through_textbook() {
+        words::register_functions(["plot3d".to_string(), "ilt".to_string()]);
+        let src = "matrix([1,2],[3,4])^^-1; a:5$ f(x):=x^2+a$ plot3d(sin(x)*cos(y),[x,-3,3],[y,-3,3])$ ilt(1/(s+a),s,t);";
+        let latex = maxima_script_to_latex(src).unwrap();
+        let back = latex_to_maxima(&latex, &ParseCtx::default()).unwrap();
+        assert_eq!(
+            back,
+            "matrix([1,2],[3,4])^^(-1); a:5$ f(x):=x^2+a$ plot3d(sin(x)*cos(y),[x,-3,3],[y,-3,3])$ ilt(1/(s+a),s,t);",
+            "{latex}"
+        );
+        // Through the tree directly as well (no LaTeX hop).
+        let t = maxima_script_to_tree(src).unwrap();
+        assert_eq!(tree_to_maxima(&t, &ParseCtx::default()).unwrap(), back);
+    }
+
+    #[test]
     fn output_display_roundtrip() {
         let r = maxima_to_tree("integrate(x*sin(x),x,0,%pi)").unwrap();
         assert!(matches!(r[0], Item::Big(BigOp::Int, ..)));
@@ -135,5 +166,17 @@ mod registry_tests {
         assert_eq!(latex_to_maxima("ratsimp(x^2/x)", &ParseCtx::default()).unwrap(), "ratsimp(x^2/x);");
         // Unregistered letter runs stay products of single letters.
         assert_eq!(latex_to_maxima("abx", &ParseCtx::default()).unwrap(), "a*b*x;");
+    }
+}
+
+#[cfg(test)]
+mod demo_tests {
+    use super::*;
+
+    #[test]
+    fn demo_cell_converts() {
+        let src = "matrix([1,2],[3,4])^^-1; a:5$ f(x):=x^2+a$ b:[1,2,3]$ g:sqrt(2)/3$";
+        let t = maxima_script_to_tree(src);
+        assert!(t.is_ok(), "{:?}", t);
     }
 }

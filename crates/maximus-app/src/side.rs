@@ -2,13 +2,17 @@
 
 use crate::app::*;
 use crate::catalog::CallTemplate;
+use crate::icons::{self, Icon};
 use eframe::egui;
 use egui::{Key, RichText};
 use maximus_help::DocEntry;
 
 impl MaximusApp {
     pub fn side_panel(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
+        // Never let content demand more width than the panel has.
+        ui.set_max_width(ui.available_width());
+        ui.set_clip_rect(ui.max_rect().intersect(ui.clip_rect()));
+        ui.horizontal_wrapped(|ui| {
             for (tab, label) in [(SideTab::Help, "Help"), (SideTab::Variables, "Variables"), (SideTab::Symbols, "Symbols"), (SideTab::Functions, "Functions")] {
                 ui.selectable_value(&mut self.tab, tab, label);
             }
@@ -28,10 +32,7 @@ impl MaximusApp {
             ui.label(RichText::new("Install the Maxima documentation (Info files) to enable integrated help.").weak());
             return;
         }
-        ui.horizontal(|ui| {
-            ui.label("🔍");
-            ui.add(egui::TextEdit::singleline(&mut self.help_search).hint_text("Search functions…").desired_width(f32::INFINITY));
-        });
+        ui.add(egui::TextEdit::singleline(&mut self.help_search).hint_text("Search functions…").desired_width(ui.available_width()));
         if !self.help_search.trim().is_empty() {
             let q = self.help_search.trim().to_string();
             let results: Vec<(String, String)> = self.help.search(&q, 30).iter().map(|e| (e.name.clone(), e.kind.clone())).collect();
@@ -62,7 +63,7 @@ impl MaximusApp {
                 ui.heading(&e.name);
                 ui.label(RichText::new(format!("{} — {}", e.kind, e.category)).small().weak());
                 for sig in &e.signatures {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         ui.label(RichText::new(sig).monospace().strong());
                         if e.is_function() && ui.small_button("Use…").on_hover_text("Insert a call using this signature").clicked() {
                             self.open_call_dialog(CallTemplate::from_signature(sig));
@@ -85,7 +86,7 @@ impl MaximusApp {
 
     fn variables_tab(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            if ui.button("⟳ Refresh").clicked() {
+            if ui.button("Refresh").clicked() {
                 self.session.refresh_variables();
             }
             if ui.button("Reset all").on_hover_text("kill(all): forget every variable and function").clicked() {
@@ -101,15 +102,14 @@ impl MaximusApp {
         egui::ScrollArea::vertical().id_salt("vars").max_height(ui.available_height() - 70.0).show(ui, |ui| {
             for v in &vars {
                 ui.horizontal_top(|ui| {
-                    ui.label(RichText::new(if v.is_function { "ƒ" } else { "=" }).weak());
-                    if ui.small_button("✕").on_hover_text("Delete").clicked() {
+                    if icons::icon_button(ui, Icon::Close, egui::vec2(20.0, 20.0), false).on_hover_text("Delete").clicked() {
                         let name = v.name.clone();
                         self.session.remove_variable(&name);
                     }
                     let editing = self.var_edit.as_ref().map_or(false, |(n, _)| *n == v.name);
                     if editing {
                         let (name, text) = self.var_edit.as_mut().unwrap();
-                        let r = ui.add(egui::TextEdit::singleline(text).font(egui::TextStyle::Monospace).desired_width(f32::INFINITY));
+                        let r = ui.add(egui::TextEdit::singleline(text).font(egui::TextStyle::Monospace).desired_width((ui.available_width() - 8.0).max(60.0)));
                         r.request_focus();
                         if r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
                             let (n, t) = (name.clone(), text.clone());
@@ -124,7 +124,7 @@ impl MaximusApp {
                             self.var_edit = None;
                         }
                     } else {
-                        ui.vertical(|ui| {
+                        egui::ScrollArea::horizontal().id_salt(("var-scroll", &v.name)).auto_shrink([false, true]).show(ui, |ui| {
                             if v.is_function {
                                 match self.tree_for(&v.value) {
                                     Some(t) => {
@@ -166,7 +166,7 @@ impl MaximusApp {
         ui.horizontal(|ui| {
             ui.add(egui::TextEdit::singleline(&mut self.new_var.0).hint_text("name").desired_width(70.0));
             ui.label(":");
-            let r = ui.add(egui::TextEdit::singleline(&mut self.new_var.1).hint_text("value").font(egui::TextStyle::Monospace).desired_width(f32::INFINITY));
+            let r = ui.add(egui::TextEdit::singleline(&mut self.new_var.1).hint_text("value").font(egui::TextStyle::Monospace).desired_width((ui.available_width() - 56.0).max(40.0)));
             let go = r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
             if (go || ui.button("Set").clicked()) && !self.new_var.0.trim().is_empty() && !self.new_var.1.trim().is_empty() {
                 let (n, v) = (self.new_var.0.trim().to_string(), self.new_var.1.trim().to_string());
@@ -216,10 +216,7 @@ impl MaximusApp {
     }
 
     fn functions_tab(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.label("🔍");
-            ui.add(egui::TextEdit::singleline(&mut self.func_search).hint_text("Find a function…").desired_width(f32::INFINITY));
-        });
+        ui.add(egui::TextEdit::singleline(&mut self.func_search).hint_text("Find a function…").desired_width(ui.available_width()));
         ui.separator();
         let q = self.func_search.trim().to_lowercase();
         egui::ScrollArea::vertical().id_salt("functions").show(ui, |ui| {

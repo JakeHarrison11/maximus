@@ -199,8 +199,8 @@ impl<'a> Layout<'a> {
                     continue;
                 }
                 Item::Char(c) if c.is_ascii_alphabetic() => {
-                    let (run, j) = collect_run(row, i);
-                    let words = split_letters(&run);
+                    let (run, j, paren) = collect_run(row, i);
+                    let words = split_letters_ctx(&run, paren);
                     let nwords = words.len();
                     for (wi, (a, b, w)) in words.into_iter().enumerate() {
                         let (txt, font, is_func) = match &w {
@@ -398,7 +398,10 @@ impl<'a> Layout<'a> {
                 st.out.w += 0.12 * size;
                 st.prev = Prev::Operator;
             }
-            ',' | ';' => {
+            crate_marker if crate_marker == maximus_math::NC_MARK => {
+                st.prev = Prev::Open;
+            }
+            ',' | ';' | '$' => {
                 let b = self.text_box(&c.to_string(), size, FontKind::Roman);
                 self.push_piece(st, b, false);
                 st.out.w += 0.22 * size;
@@ -659,23 +662,24 @@ impl<'a> Layout<'a> {
         let axis = AXIS * size;
         match op {
             BigOp::Int | BigOp::IntNoLimits => {
-                let ss = (rest_h * 0.95).clamp(1.5 * size, 3.4 * size);
-                let sw = self.m.width("∫", ss, FontKind::Roman);
-                let half = 0.55 * ss;
-                let mut b = Boxed { w: sw, asc: axis + half, desc: half - axis, ops: vec![], marks: vec![] };
-                b.ops.push(Op::Text { x: 0.0, y: -axis + 0.28 * ss, text: "∫".into(), size: ss, font: FontKind::Roman });
-                let mut lim_w: f32 = 0.0;
-                if let Some(h) = hi {
-                    lim_w = lim_w.max(h.w);
-                    let y = -(axis + half) + h.asc * 0.9;
-                    b.place(h, sw * 0.95, y);
+                let h = (rest_h * 1.05).clamp(1.9 * size, 3.8 * size);
+                let w = (0.28 * h).clamp(0.42 * size, 0.75 * size);
+                let (top, bottom) = (-(axis + h / 2.0), h / 2.0 - axis);
+                let mut b = Boxed { w, asc: axis + h / 2.0, desc: h / 2.0 - axis, ops: vec![], marks: vec![] };
+                b.ops.push(Op::Poly { pts: integral_curve(w, top, h), width: (size * 0.075).max(1.2) });
+                let gap = 0.06 * size;
+                let mut total = w;
+                if let Some(hi) = hi {
+                    total = total.max(w + gap + hi.w);
+                    let y = top - 0.12 * size + hi.asc;
+                    b.place(hi, w + gap, y);
                 }
-                if let Some(l) = lo {
-                    lim_w = lim_w.max(l.w);
-                    let y = (half - axis) - l.desc * 0.9;
-                    b.place(l, sw * 0.45, y);
+                if let Some(lo) = lo {
+                    total = total.max(0.45 * w + gap + lo.w);
+                    let y = bottom + 0.16 * size - lo.desc;
+                    b.place(lo, 0.45 * w + gap, y);
                 }
-                b.w = if lim_w > 0.0 { sw * 0.95 + lim_w } else { sw };
+                b.w = total;
                 b
             }
             BigOp::Sum | BigOp::Prod => {
@@ -724,4 +728,36 @@ fn display_name(n: &str) -> String {
         "log" => "ln".into(),
         n => n.to_string(),
     }
+}
+
+/// Outline of an integral sign filling a box of width `w` and height `h` whose top is at `top`.
+fn integral_curve(w: f32, top: f32, h: f32) -> Vec<(f32, f32)> {
+    const CTRL: [(f32, f32); 12] = [
+        (0.97, 0.13),
+        (0.90, 0.04),
+        (0.79, 0.02),
+        (0.69, 0.09),
+        (0.63, 0.26),
+        (0.55, 0.50),
+        (0.47, 0.74),
+        (0.40, 0.91),
+        (0.30, 0.98),
+        (0.18, 0.97),
+        (0.09, 0.91),
+        (0.05, 0.84),
+    ];
+    let mut out = Vec::new();
+    for i in 0..CTRL.len() - 1 {
+        let p0 = CTRL[i.saturating_sub(1)];
+        let (p1, p2) = (CTRL[i], CTRL[i + 1]);
+        let p3 = CTRL[(i + 2).min(CTRL.len() - 1)];
+        for k in 0..8 {
+            let t = k as f32 / 8.0;
+            let cr = |a: f32, b: f32, c: f32, d: f32| 0.5 * ((2.0 * b) + (-a + c) * t + (2.0 * a - 5.0 * b + 4.0 * c - d) * t * t + (-a + 3.0 * b - 3.0 * c + d) * t * t * t);
+            out.push((cr(p0.0, p1.0, p2.0, p3.0) * w, top + cr(p0.1, p1.1, p2.1, p3.1) * h));
+        }
+    }
+    let last = CTRL[CTRL.len() - 1];
+    out.push((last.0 * w, top + last.1 * h));
+    out
 }
