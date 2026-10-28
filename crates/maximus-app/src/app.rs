@@ -134,9 +134,8 @@ pub struct MaximusApp {
     pub matrix_dialog: Option<(usize, usize)>,
     pub last_mode: bool,
     pub min_applied: Option<(bool, f32)>,
-    pub resize_hold_until: f64,
-    pub size_dirty_since: Option<f64>,
-    pub maximize_changed_at: f64,
+    /// Window size of each mode (full, minimal) while the app runs; used when switching back to a mode.
+    pub mode_sizes: [Option<[f32; 2]>; 2],
     pub min_scroll_frames: u32,
 }
 
@@ -159,7 +158,6 @@ impl MaximusApp {
         maximus_math::words::register_functions(help.entries.iter().filter(|e| e.is_function()).map(|e| e.name.clone()));
         let init_tab = settings.side_tab;
         let last_mode = settings.minimal;
-        let start_maximized = settings.maximized_for_mode();
         let session = Session::new(make_backend(&settings));
         let mut app = MaximusApp {
             settings,
@@ -204,9 +202,7 @@ impl MaximusApp {
             matrix_dialog: None,
             last_mode,
             min_applied: None,
-            resize_hold_until: if start_maximized { 1.5 } else { 0.0 },
-            size_dirty_since: None,
-            maximize_changed_at: f64::NEG_INFINITY,
+            mode_sizes: [None, None],
             min_scroll_frames: 0,
         };
         app.manual_cats = app
@@ -499,9 +495,9 @@ impl MaximusApp {
         }
     }
 
-    /// Switches the window to the remembered size of the active mode and remembers manual resizes.
+    /// Resizes the window when the mode changes. Window sizes are not saved between runs, but switching
+    /// back to a mode restores the size it had before.
     fn manage_window(&mut self, ctx: &egui::Context) {
-        let now = ctx.input(|i| i.time);
         if self.tab != self.settings.side_tab {
             self.settings.side_tab = self.tab;
             self.settings.save();
@@ -510,62 +506,29 @@ impl MaximusApp {
         if (zoom - self.settings.ui_scale).abs() > 0.001 && !self.settings_open {
             self.settings.ui_scale = zoom;
             self.settings.save();
-            self.resize_hold_until = now + 0.6;
         }
-        // The minimum is in logical pixels like the stored sizes, so it follows mode and UI scale.
+        // Sizes are in logical pixels; egui sizes are in points, which the UI scale stretches.
         if self.min_applied != Some((self.settings.minimal, zoom)) {
             self.min_applied = Some((self.settings.minimal, zoom));
             let [mw, mh] = settings::min_size(self.settings.minimal, zoom);
             ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(egui::vec2(mw / zoom, mh / zoom)));
         }
         if self.settings.minimal != self.last_mode {
+            let was_maximized = ctx.input(|i| i.viewport().maximized).unwrap_or(false);
+            if !was_maximized {
+                // Wayland never reports inner_rect, so fall back to the size of the viewport.
+                let r = ctx.input(|i| i.viewport().inner_rect).unwrap_or_else(|| ctx.viewport_rect());
+                self.mode_sizes[self.last_mode as usize] = Some([(r.width() * zoom).round(), (r.height() * zoom).round()]);
+            }
             self.last_mode = self.settings.minimal;
-            // Sizes are stored in logical pixels; egui sizes are in points, which the UI scale stretches.
-            let [w, h] = self.settings.size_for_mode();
-            // Only touch the maximized state when it actually has to change; a redundant request can cancel the resize.
-            let want_max = self.settings.maximized_for_mode();
-            let is_max = ctx.input(|i| i.viewport().maximized).unwrap_or(false);
-            if want_max != is_max {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(want_max));
+            let size = self.mode_sizes[self.settings.minimal as usize].unwrap_or_else(|| settings::default_size(self.settings.minimal, zoom));
+            let [w, h] = settings::clamp_size(size, self.settings.minimal, zoom);
+            // A redundant maximize request can cancel the resize, so only send it when needed.
+            if was_maximized {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
             }
-            if !want_max {
-                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w / zoom, h / zoom)));
-            }
-            self.resize_hold_until = now + 1.2;
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w / zoom, h / zoom)));
             self.settings.save();
-            return;
-        }
-        if now < self.resize_hold_until {
-            return;
-        }
-        // A maximized window is remembered as such and leaves the stored (restored) size untouched.
-        let maximized = ctx.input(|i| i.viewport().maximized).unwrap_or(false);
-        let flag = if self.settings.minimal { &mut self.settings.minimal_maximized } else { &mut self.settings.full_maximized };
-        if *flag != maximized {
-            *flag = maximized;
-            self.size_dirty_since = Some(now);
-            self.maximize_changed_at = now;
-        }
-        // The size changes together with the maximized state, so skip a moment around each change.
-        if !maximized && now - self.maximize_changed_at > 0.5 {
-            // Wayland never reports inner_rect, so fall back to the size of the viewport.
-            let r = ctx.input(|i| i.viewport().inner_rect).unwrap_or_else(|| ctx.viewport_rect());
-            let size = [(r.width() * zoom).round(), (r.height() * zoom).round()];
-            let min = settings::min_size(self.settings.minimal, zoom);
-            let size = [size[0].max(min[0]), size[1].max(min[1])];
-            let slot = if self.settings.minimal { &mut self.settings.minimal_size } else { &mut self.settings.full_size };
-            if (slot[0] - size[0]).abs() >= 1.0 || (slot[1] - size[1]).abs() >= 1.0 {
-                *slot = size;
-                self.size_dirty_since = Some(now);
-            }
-        }
-        if let Some(t) = self.size_dirty_since {
-            if now - t > 0.3 {
-                self.settings.save();
-                self.size_dirty_since = None;
-            } else {
-                ctx.request_repaint_after(std::time::Duration::from_millis(150));
-            }
         }
     }
 
@@ -1164,7 +1127,6 @@ impl MaximusApp {
             let scale = ui.add(egui::Slider::new(&mut self.settings.ui_scale, 0.7..=2.0).text("UI scale").step_by(0.05));
             if scale.drag_stopped() || (scale.changed() && !scale.dragged()) {
                 ctx.set_zoom_factor(self.settings.ui_scale);
-                self.resize_hold_until = ctx.input(|i| i.time) + 0.6;
                 changed = true;
             }
             changed |= ui.add(egui::Slider::new(&mut self.settings.math_size, 12.0..=40.0).text("Math size")).changed();
