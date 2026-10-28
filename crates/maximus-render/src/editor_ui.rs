@@ -206,19 +206,51 @@ pub fn math_editor(ui: &mut egui::Ui, id: Id, state: &mut EditorState, style: &E
             style.color.gamma_multiply(0.4),
         );
     }
-    for sel in state.selection_segments() {
-        let x_at = |pos: usize| b.marks.iter().find(|m| m.path == sel.path && m.pos == pos).map(|m| m.x);
-        if let (Some(x0), Some(x1)) = (x_at(sel.start), x_at(sel.end)) {
+    {
+        let x_at = |path: &[(usize, usize)], pos: usize| b.marks.iter().find(|m| m.path == path && m.pos == pos).map(|m| m.x);
+        let y_of = |path: &[(usize, usize)]| {
             let (mut y0, mut y1) = (f32::MAX, f32::MIN);
-            for r in b.rows.iter().filter(|r| r.path == sel.path) {
+            for r in b.rows.iter().filter(|r| r.path == path) {
                 y0 = y0.min(r.y0);
                 y1 = y1.max(r.y1);
             }
             if y0 > y1 {
                 (y0, y1) = (-style.size * 0.8, style.size * 0.25);
             }
-            let hl = Rect::from_min_max(Pos2::new(o.x + x0.min(x1), o.y + y0 - 1.0), Pos2::new(o.x + x0.max(x1), o.y + y1 + 1.0));
-            ui.painter().with_clip_rect(rect).rect_filled(hl, 2.0, visuals.selection.bg_fill);
+            (y0, y1)
+        };
+        let mut rects: Vec<(f32, f32, f32, f32)> = Vec::new();
+        for part in state.selection_parts() {
+            match part {
+                crate::editor::Part::Items(sel) => {
+                    if let (Some(x0), Some(x1)) = (x_at(&sel.path, sel.start), x_at(&sel.path, sel.end)) {
+                        let (y0, y1) = y_of(&sel.path);
+                        rects.push((x0.min(x1), x0.max(x1), y0, y1));
+                    }
+                }
+                crate::editor::Part::Open { parent, idx } => {
+                    let mut inner = parent.clone();
+                    inner.push((idx, 0));
+                    if let (Some(x0), Some(x1)) = (x_at(&parent, idx), x_at(&inner, 0)) {
+                        let (y0, y1) = y_of(&inner);
+                        rects.push((x0.min(x1), x0.max(x1), y0, y1));
+                    }
+                }
+                crate::editor::Part::Close { parent, idx } => {
+                    let mut inner = parent.clone();
+                    inner.push((idx, 0));
+                    let end = b.marks.iter().filter(|m| m.path == inner).map(|m| m.pos).max().unwrap_or(0);
+                    if let (Some(x0), Some(x1)) = (x_at(&inner, end), x_at(&parent, idx + 1)) {
+                        let (y0, y1) = y_of(&inner);
+                        rects.push((x0.min(x1), x0.max(x1), y0, y1));
+                    }
+                }
+            }
+        }
+        let painter = ui.painter().with_clip_rect(rect);
+        for (x0, x1, y0, y1) in rects {
+            let hl = Rect::from_min_max(Pos2::new(o.x + x0, o.y + y0 - 1.0), Pos2::new(o.x + x1, o.y + y1 + 1.0));
+            painter.rect_filled(hl, 2.0, visuals.selection.bg_fill);
         }
     }
     paint(&ui.painter().with_clip_rect(rect), o, &b, style.color);

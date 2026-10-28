@@ -833,6 +833,15 @@ pub struct Selection {
     pub end: usize,
 }
 
+/// One piece of a selection.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Part {
+    Items(Selection),
+    /// The opening bracket of the pair at `idx` in the row `parent`.
+    Open { parent: Path, idx: usize },
+    Close { parent: Path, idx: usize },
+}
+
 /// Which structure to wrap a selection in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Wrap {
@@ -910,54 +919,85 @@ impl EditorState {
         (lo2 != hi2).then_some((lo2, hi2))
     }
 
-    /// The selection as runs of items in document order. It is more than one run when it starts or ends
-    /// inside a bracket pair.
-    pub fn selection_segments(&mut self) -> Vec<Selection> {
+    /// The selection in document order as runs of items and selected brackets. It has several parts
+    /// when it starts or ends inside a bracket pair: the bracket itself is then selected too.
+    pub fn selection_parts(&mut self) -> Vec<Part> {
         let Some((lo, hi)) = self.selection_bounds() else { return vec![] };
         let k = lo.path.iter().zip(hi.path.iter()).take_while(|(x, y)| x == y).count();
-        let mut segs: Vec<Selection> = Vec::new();
+        let mut parts: Vec<Part> = Vec::new();
         let len_of = |s: &mut Self, p: &[(usize, usize)]| row_at(&mut s.row, p).map_or(0, |r| r.len());
-        // Start side, innermost row first.
+        // Start side, innermost row first; each row is followed by the closing bracket of its pair.
         for d in (k + 1..=lo.path.len()).rev() {
             let path = lo.path[..d].to_vec();
             let start = if d == lo.path.len() { lo.pos } else { lo.path[d].0 + 1 };
             let end = len_of(self, &path);
-            segs.push(Selection { path, start, end });
+            parts.push(Part::Items(Selection { path, start, end }));
+            parts.push(Part::Close { parent: lo.path[..d - 1].to_vec(), idx: lo.path[d - 1].0 });
         }
         // The row both ends share.
         let start = if lo.path.len() > k { lo.path[k].0 + 1 } else { lo.pos };
         let end = if hi.path.len() > k { hi.path[k].0 } else { hi.pos };
-        segs.push(Selection { path: lo.path[..k].to_vec(), start, end });
-        // End side, outermost row first.
+        parts.push(Part::Items(Selection { path: lo.path[..k].to_vec(), start, end }));
+        // End side, outermost first; each row is preceded by the opening bracket of its pair.
         for d in k + 1..=hi.path.len() {
+            parts.push(Part::Open { parent: hi.path[..d - 1].to_vec(), idx: hi.path[d - 1].0 });
             let path = hi.path[..d].to_vec();
             let end = if d == hi.path.len() { hi.pos } else { hi.path[d].0 };
-            segs.push(Selection { path, start: 0, end });
+            parts.push(Part::Items(Selection { path, start: 0, end }));
         }
-        segs.retain(|s| s.start < s.end);
-        segs
+        parts.retain(|p| match p {
+            Part::Items(s) => s.start < s.end,
+            _ => true,
+        });
+        parts
     }
 
-    /// The selection when it is a single run of items.
+    /// The selected runs of items (without bracket characters).
+    pub fn selection_segments(&mut self) -> Vec<Selection> {
+        self.selection_parts()
+            .into_iter()
+            .filter_map(|p| match p {
+                Part::Items(s) => Some(s),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The selection when it is a single run of items with no bracket selected.
     pub fn selection(&mut self) -> Option<Selection> {
-        let mut s = self.selection_segments();
-        (s.len() == 1).then(|| s.remove(0))
+        let mut p = self.selection_parts();
+        if p.len() == 1 {
+            if let Part::Items(s) = p.remove(0) {
+                return Some(s);
+            }
+        }
+        None
     }
 
     pub fn has_selection(&mut self) -> bool {
-        !self.selection_segments().is_empty()
+        !self.selection_parts().is_empty()
     }
 
-    /// The selected items, joined in document order.
+    /// The selected items in document order; selected brackets appear as plain characters.
     pub fn selected_row(&mut self) -> Option<Row> {
-        let segs = self.selection_segments();
-        if segs.is_empty() {
+        let parts = self.selection_parts();
+        if parts.is_empty() {
             return None;
         }
         let mut out: Row = Vec::new();
-        for s in segs {
-            if let Some(r) = row_at(&mut self.row, &s.path) {
-                out.extend(r[s.start..s.end].iter().cloned());
+        for p in parts {
+            match p {
+                Part::Items(s) => {
+                    if let Some(r) = row_at(&mut self.row, &s.path) {
+                        out.extend(r[s.start..s.end].iter().cloned());
+                    }
+                }
+                Part::Open { ref parent, idx } | Part::Close { ref parent, idx } => {
+                    let is_open = matches!(p, Part::Open { .. });
+                    if let Some(Item::Group(o, c, _)) = row_at(&mut self.row, parent).and_then(|r| r.get(idx)) {
+                        out.push(Item::Char(if is_open { *o } else { *c }));
+                    }
+                }
             }
         }
         Some(out)
@@ -972,20 +1012,50 @@ impl EditorState {
         self.anchor = None;
     }
 
-    /// Removes the selected items. Returns whether anything was selected.
+    /// Removes the selected items. A selected bracket is removed on its own, which leaves the other
+    /// bracket of the pair behind as a plain character. Returns whether anything was selected.
     pub fn delete_selection(&mut self) -> bool {
-        let Some((lo, _)) = self.selection_bounds() else {
+        let Some((lo, hi)) = self.selection_bounds() else {
             self.anchor = None;
             return false;
         };
-        let segs = self.selection_segments();
-        // Last run first, so earlier positions stay valid.
-        for s in segs.iter().rev() {
-            if let Some(r) = row_at(&mut self.row, &s.path) {
-                r.drain(s.start..s.end);
+        let parts = self.selection_parts();
+        let k = lo.path.iter().zip(hi.path.iter()).take_while(|(x, y)| x == y).count();
+        // Where the shared row's selected run starts; groups the selection ends in sit right there afterwards.
+        let common_start = if lo.path.len() > k { lo.path[k].0 + 1 } else { lo.pos };
+        // Items first, last run first so earlier positions stay valid.
+        for p in parts.iter().rev() {
+            if let Part::Items(s) = p {
+                if let Some(r) = row_at(&mut self.row, &s.path) {
+                    r.drain(s.start..s.end);
+                }
             }
         }
-        self.cur = lo;
+        // Then the brackets: the end side (innermost first), then the start side (innermost first).
+        let opens: Vec<&Part> = parts.iter().filter(|p| matches!(p, Part::Open { .. })).collect();
+        for p in opens.iter().rev() {
+            if let Part::Open { parent, .. } = p {
+                // Deleting the run before the first end-side group moved it to `common_start`.
+                let mut parent = parent.clone();
+                if parent.len() > k {
+                    parent[k].0 = common_start;
+                }
+                let idx = if parent.len() == k { common_start } else { 0 };
+                self.dissolve_group(&parent, idx, Some(false));
+            }
+        }
+        for p in parts.iter().filter(|p| matches!(p, Part::Close { .. })) {
+            if let Part::Close { parent, idx } = p {
+                self.dissolve_group(parent, *idx, Some(true));
+            }
+        }
+        self.cur = if lo.path.len() > k {
+            // The start side's brackets stay behind as plain `(` characters in front of what is left.
+            let pos: usize = lo.path[k..].iter().map(|(i, _)| i + 1).sum::<usize>() + lo.pos;
+            Cursor { path: lo.path[..k].to_vec(), pos }
+        } else {
+            lo
+        };
         self.anchor = None;
         true
     }
@@ -1393,9 +1463,11 @@ mod bracket_selection_tests {
             segs,
             vec![Selection { path: vec![], start: 0, end: 1 }, Selection { path: vec![(1, 0)], start: 0, end: 2 }]
         );
-        assert_eq!(latex_of(e.selected_row()).as_deref(), Some("ab+"));
+        // The opening bracket is selected too, in its place between `a` and `b`.
+        assert_eq!(latex_of(e.selected_row()).as_deref(), Some("a(b+"));
         assert!(e.delete_selection());
-        assert_eq!(e.latex(), "\\left( c \\right)d");
+        // Its closing partner stays behind as a lone bracket.
+        assert_eq!(e.latex(), "c)d");
         assert_eq!(e.cur, Cursor { path: vec![], pos: 0 });
     }
 
@@ -1414,13 +1486,67 @@ mod bracket_selection_tests {
         f.anchor = Some(Cursor { path: vec![], pos: 3 });
         f.cur = Cursor { path: vec![(1, 0)], pos: 1 };
         assert_eq!(f.selection_segments(), e.selection_segments());
+        assert_eq!(latex_of(e.selected_row()).as_deref(), Some("+c)d"));
         assert!(e.delete_selection());
-        assert_eq!(e.latex(), "a\\left( b \\right)");
+        assert_eq!(e.latex(), "a(b");
+        assert_eq!(e.cur, Cursor { path: vec![], pos: 3 });
         // Through the whole bracket from outside to outside selects the bracket pair as a whole item.
         let mut g = typed("a(b+c)d");
         g.anchor = Some(Cursor { path: vec![], pos: 0 });
         g.cur = Cursor { path: vec![], pos: 3 };
         assert_eq!(g.selection_segments(), vec![Selection { path: vec![], start: 0, end: 3 }]);
+    }
+
+    #[test]
+    fn a_bracket_can_be_selected_on_its_own() {
+        let mut e = typed("a(b+c)d");
+        // One step right from just before `(`: only the bracket is selected.
+        e.anchor = Some(Cursor { path: vec![], pos: 1 });
+        e.cur = Cursor { path: vec![(1, 0)], pos: 0 };
+        assert_eq!(e.selection_parts(), vec![Part::Open { parent: vec![], idx: 1 }]);
+        assert_eq!(latex_of(e.selected_row()).as_deref(), Some("("));
+        assert!(e.delete_selection());
+        assert_eq!(e.latex(), "ab+c)d");
+        // The same from the closing side.
+        let mut f = typed("a(b+c)d");
+        f.anchor = Some(Cursor { path: vec![(1, 0)], pos: 3 });
+        f.cur = Cursor { path: vec![], pos: 2 };
+        assert_eq!(f.selection_parts(), vec![Part::Close { parent: vec![], idx: 1 }]);
+        assert!(f.delete_selection());
+        assert_eq!(f.latex(), "a(b+cd");
+    }
+
+    #[test]
+    fn nested_brackets_are_selected_and_deleted_term_by_term() {
+        // Ending deep inside: both opening brackets on the way are selected.
+        let mut e = typed("a((b)c)d");
+        e.anchor = Some(Cursor { path: vec![], pos: 0 });
+        e.cur = Cursor { path: vec![(1, 0), (0, 0)], pos: 1 };
+        assert_eq!(latex_of(e.selected_row()).as_deref(), Some("a((b"));
+        assert!(e.delete_selection());
+        assert_eq!(e.latex(), ")c)d");
+        // Starting deep inside: both closing brackets on the way out are selected.
+        let mut f = typed("a((b)c)d");
+        f.anchor = Some(Cursor { path: vec![(1, 0), (0, 0)], pos: 0 });
+        f.cur = Cursor { path: vec![], pos: 3 };
+        assert_eq!(latex_of(f.selected_row()).as_deref(), Some("b)c)d"));
+        assert!(f.delete_selection());
+        assert_eq!(f.latex(), "a((");
+        assert_eq!(f.cur, Cursor { path: vec![], pos: 3 });
+    }
+
+    #[test]
+    fn selection_between_two_brackets() {
+        let mut e = typed("a(b)c(d)e");
+        e.anchor = Some(Cursor { path: vec![(1, 0)], pos: 0 });
+        e.cur = Cursor { path: vec![(3, 0)], pos: 1 };
+        assert_eq!(latex_of(e.selected_row()).as_deref(), Some("b)c(d"));
+        assert!(e.delete_selection());
+        assert_eq!(e.latex(), "a()e");
+        assert_eq!(e.cur, Cursor { path: vec![], pos: 2 });
+        // Everything stays editable and consistent afterwards.
+        e.type_text("x");
+        assert_eq!(e.latex(), "a(x)e");
     }
 
     #[test]
