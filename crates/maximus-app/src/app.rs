@@ -44,6 +44,14 @@ pub enum FileKind {
     ExportMaxima,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+pub struct FilePick {
+    pub kind: FileKind,
+    pub rx: std::sync::mpsc::Receiver<Option<PathBuf>>,
+    pub started: std::time::Instant,
+    pub fallback_path: String,
+}
+
 pub struct FileDialog {
     pub kind: FileKind,
     pub path: String,
@@ -78,6 +86,8 @@ pub struct MaximusApp {
     pub tree_cache: HashMap<String, Option<Arc<Row>>>,
     pub gnuplot_cache: HashMap<String, Result<PathBuf, String>>,
     pub file_dialog: Option<FileDialog>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub file_pick: Option<FilePick>,
     pub current_path: Option<PathBuf>,
     pub settings_open: bool,
     pub about_open: bool,
@@ -139,6 +149,8 @@ impl MaximusApp {
             tree_cache: HashMap::new(),
             gnuplot_cache: HashMap::new(),
             file_dialog: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            file_pick: None,
             current_path: None,
             settings_open: false,
             about_open: false,
@@ -485,7 +497,7 @@ impl MaximusApp {
             self.save_or_dialog();
         }
         if open {
-            self.file_dialog = Some(FileDialog { kind: FileKind::Open, path: self.default_path() });
+            self.request_file(FileKind::Open, self.default_path());
         }
         if minimal {
             self.settings.minimal = !self.settings.minimal;
@@ -499,6 +511,77 @@ impl MaximusApp {
         }
     }
 
+    /// Asks for a file with the system file picker (or a simple path dialog where none is available).
+    pub fn request_file(&mut self, kind: FileKind, path: String) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if self.file_pick.is_some() {
+                return;
+            }
+            let (tx, rx) = std::sync::mpsc::channel();
+            let p = PathBuf::from(&path);
+            std::thread::spawn(move || {
+                let mut d = rfd::FileDialog::new();
+                if let Some(dir) = p.parent().filter(|d| d.is_dir()) {
+                    d = d.set_directory(dir);
+                }
+                if let Some(n) = p.file_name().and_then(|n| n.to_str()) {
+                    d = d.set_file_name(n);
+                }
+                let (title, filter_name, ext) = match kind {
+                    FileKind::Open => ("Open notebook", "Maximus notebook", "maximus"),
+                    FileKind::Save => ("Save notebook", "Maximus notebook", "maximus"),
+                    FileKind::ExportLatex => ("Export as LaTeX", "LaTeX", "tex"),
+                    FileKind::ExportMaxima => ("Export as Maxima script", "Maxima script", "mac"),
+                };
+                d = d.set_title(title).add_filter(filter_name, &[ext]);
+                let r = if kind == FileKind::Open { d.pick_file() } else { d.save_file() };
+                let _ = tx.send(r);
+            });
+            self.file_pick = Some(FilePick { kind, rx, started: std::time::Instant::now(), fallback_path: path });
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.file_dialog = Some(FileDialog { kind, path });
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn poll_file_pick(&mut self, ctx: &egui::Context) {
+        let Some(pick) = &self.file_pick else { return };
+        match pick.rx.try_recv() {
+            Ok(res) => {
+                let (kind, started, fallback) = (pick.kind, pick.started, pick.fallback_path.clone());
+                self.file_pick = None;
+                match res {
+                    Some(mut p) => {
+                        let ext = match kind {
+                            FileKind::ExportLatex => "tex",
+                            FileKind::ExportMaxima => "mac",
+                            _ => "maximus",
+                        };
+                        if kind != FileKind::Open && p.extension().is_none() {
+                            p.set_extension(ext);
+                        }
+                        match kind {
+                            FileKind::Save => self.save_path(&p),
+                            FileKind::Open => self.open_path(&p),
+                            k => self.export(k, &p),
+                        }
+                    }
+                    // A picker that closes immediately did not open at all (for example no desktop portal):
+                    // fall back to typing a path.
+                    None if started.elapsed() < std::time::Duration::from_millis(250) => {
+                        self.file_dialog = Some(FileDialog { kind, path: fallback });
+                    }
+                    None => {}
+                }
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => ctx.request_repaint_after(std::time::Duration::from_millis(150)),
+            Err(_) => self.file_pick = None,
+        }
+    }
+
     pub fn default_path(&self) -> String {
         self.current_path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| {
             let base = dirs_home().unwrap_or_else(|| PathBuf::from("."));
@@ -509,7 +592,7 @@ impl MaximusApp {
     pub fn save_or_dialog(&mut self) {
         match self.current_path.clone() {
             Some(p) => self.save_path(&p),
-            None => self.file_dialog = Some(FileDialog { kind: FileKind::Save, path: self.default_path() }),
+            None => self.request_file(FileKind::Save, self.default_path()),
         }
     }
 
@@ -532,7 +615,7 @@ impl MaximusApp {
                     ui.close();
                 }
                 if ui.add(egui::Button::new("Open…").shortcut_text("Ctrl+O")).clicked() {
-                    self.file_dialog = Some(FileDialog { kind: FileKind::Open, path: self.default_path() });
+                    self.request_file(FileKind::Open, self.default_path());
                     ui.close();
                 }
                 if ui.add(egui::Button::new("Save").shortcut_text("Ctrl+S")).clicked() {
@@ -540,18 +623,18 @@ impl MaximusApp {
                     ui.close();
                 }
                 if ui.button("Save as…").clicked() {
-                    self.file_dialog = Some(FileDialog { kind: FileKind::Save, path: self.default_path() });
+                    self.request_file(FileKind::Save, self.default_path());
                     ui.close();
                 }
                 ui.separator();
                 if ui.button("Export as LaTeX…").clicked() {
                     let p = self.default_path().replace(".maximus", ".tex");
-                    self.file_dialog = Some(FileDialog { kind: FileKind::ExportLatex, path: p });
+                    self.request_file(FileKind::ExportLatex, p);
                     ui.close();
                 }
                 if ui.button("Export as Maxima script…").clicked() {
                     let p = self.default_path().replace(".maximus", ".mac");
-                    self.file_dialog = Some(FileDialog { kind: FileKind::ExportMaxima, path: p });
+                    self.request_file(FileKind::ExportMaxima, p);
                     ui.close();
                 }
                 ui.separator();
@@ -1013,6 +1096,8 @@ impl eframe::App for MaximusApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.poll_session(&ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.poll_file_pick(&ctx);
         if self.run_on_start && self.session.ready {
             self.run_on_start = false;
             self.session.evaluate_all();
