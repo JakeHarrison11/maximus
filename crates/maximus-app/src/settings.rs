@@ -44,6 +44,8 @@ pub struct Settings {
     pub side_fraction: f32,
     pub contextual_help: bool,
     pub disabled_plugins: Vec<String>,
+    /// Folder of the last notebook that was opened, saved or exported; the file picker starts there.
+    pub last_dir: Option<String>,
 }
 
 impl Default for Settings {
@@ -63,6 +65,7 @@ impl Default for Settings {
             side_fraction: 0.3,
             contextual_help: true,
             disabled_plugins: Vec::new(),
+            last_dir: None,
         }
     }
 }

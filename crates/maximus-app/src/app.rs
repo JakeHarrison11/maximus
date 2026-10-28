@@ -257,6 +257,16 @@ impl MaximusApp {
 
     // ------------------------------------------------------------ files
 
+    fn remember_dir(&mut self, p: &std::path::Path) {
+        let dir = p.parent().filter(|d| !d.as_os_str().is_empty()).and_then(|d| d.canonicalize().ok());
+        if let Some(dir) = dir.map(|d| d.display().to_string()) {
+            if self.settings.last_dir.as_deref() != Some(dir.as_str()) {
+                self.settings.last_dir = Some(dir);
+                self.settings.save();
+            }
+        }
+    }
+
     pub fn open_path(&mut self, p: &std::path::Path) {
         match std::fs::read_to_string(p).map_err(|e| e.to_string()).and_then(|t| Notebook::from_json(&t)) {
             Ok(nb) => {
@@ -264,6 +274,7 @@ impl MaximusApp {
                 self.cell_ui.clear();
                 self.active_cell = None;
                 self.current_path = Some(p.to_path_buf());
+                self.remember_dir(p);
                 self.messages.push(format!("Opened {}", p.display()));
             }
             Err(e) => self.messages.push(format!("Could not open {}: {}", p.display(), e)),
@@ -274,6 +285,7 @@ impl MaximusApp {
         match std::fs::write(p, self.session.notebook.to_json()) {
             Ok(()) => {
                 self.current_path = Some(p.to_path_buf());
+                self.remember_dir(p);
                 self.messages.push(format!("Saved {}", p.display()));
             }
             Err(e) => self.messages.push(format!("Could not save {}: {}", p.display(), e)),
@@ -286,7 +298,10 @@ impl MaximusApp {
             _ => self.session.notebook.to_maxima_script(&self.session.parse_ctx()),
         };
         match std::fs::write(p, text) {
-            Ok(()) => self.messages.push(format!("Exported {}", p.display())),
+            Ok(()) => {
+                self.remember_dir(p);
+                self.messages.push(format!("Exported {}", p.display()));
+            }
             Err(e) => self.messages.push(format!("Could not export {}: {}", p.display(), e)),
         }
     }
@@ -689,11 +704,18 @@ impl MaximusApp {
         }
     }
 
+    /// Suggested path for the file picker: the current file name inside the last used folder.
     pub fn default_path(&self) -> String {
-        self.current_path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| {
-            let base = dirs_home().unwrap_or_else(|| PathBuf::from("."));
-            base.join("notebook.maximus").display().to_string()
-        })
+        let name = self
+            .current_path
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_owned())
+            .unwrap_or_else(|| "notebook.maximus".into());
+        let last = self.settings.last_dir.as_ref().map(PathBuf::from).filter(|d| d.is_dir());
+        let current = self.current_path.as_ref().and_then(|p| p.parent()).map(PathBuf::from).filter(|d| d.is_dir());
+        let base = last.or(current).or_else(dirs_home).unwrap_or_else(|| PathBuf::from("."));
+        base.join(name).display().to_string()
     }
 
     pub fn save_or_dialog(&mut self) {
