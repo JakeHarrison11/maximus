@@ -48,7 +48,7 @@ Other files: `examples/demo.maximus` (guided tour; a test evaluates every cell, 
 
 ## Settings and files
 
-Settings live in `<config dir>/maximus/settings.json` (`dirs::config_dir`, so `$XDG_CONFIG_HOME` is honoured; use a temp `XDG_CONFIG_HOME` when testing). Window sizes are stored in **logical pixels**; egui reports **points** (logical pixels divided by the UI scale), so convert with `ctx.zoom_factor()`. Minimum window sizes are defined in points and scaled by UI scale (`settings::min_size`). On Wayland egui never reports `viewport().inner_rect`, so the code falls back to `ctx.viewport_rect()`.
+Settings live in `<config dir>/maximus/settings.json` (`dirs::config_dir`, so `$XDG_CONFIG_HOME` is honoured; use a temp `XDG_CONFIG_HOME` when testing). Window sizes are stored in **logical pixels**; egui reports **points** (logical pixels divided by the UI scale), so convert with `ctx.zoom_factor()`. Minimum window sizes are defined in points and scaled by UI scale (`settings::min_size`). A maximized window is stored as `full_maximized` / `minimal_maximized` and leaves the stored restored size untouched. On Wayland egui never reports `viewport().inner_rect`, so the code falls back to `ctx.viewport_rect()`.
 
 ## Testing and visual checks
 

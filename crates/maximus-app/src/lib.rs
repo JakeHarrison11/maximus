@@ -17,7 +17,7 @@ pub fn run_native(opts: Options) -> eframe::Result {
         saved.minimal = true;
     }
     let native = eframe::NativeOptions {
-        viewport: eframe::egui::ViewportBuilder::default().with_inner_size(saved.size_for_mode()).with_min_inner_size(saved.min_size_for_mode()).with_title("Maximus"),
+        viewport: eframe::egui::ViewportBuilder::default().with_inner_size(saved.size_for_mode()).with_maximized(saved.maximized_for_mode()).with_min_inner_size(saved.min_size_for_mode()).with_title("Maximus"),
         ..Default::default()
     };
     eframe::run_native("Maximus", native, Box::new(move |cc| Ok(Box::new(MaximusApp::new(cc, opts)))))

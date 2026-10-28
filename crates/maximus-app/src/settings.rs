@@ -29,6 +29,9 @@ pub struct Settings {
     /// Remembered inner window size for full and minimal mode.
     pub full_size: [f32; 2],
     pub minimal_size: [f32; 2],
+    /// Whether the window was maximized when last closed, for full and minimal mode.
+    pub full_maximized: bool,
+    pub minimal_maximized: bool,
     pub dark: bool,
     /// Overall interface scale (egui zoom factor).
     pub ui_scale: f32,
@@ -54,6 +57,8 @@ impl Default for Settings {
             side_tab: SideTab::Help,
             full_size: DEFAULT_FULL_SIZE,
             minimal_size: DEFAULT_MINIMAL_SIZE,
+            full_maximized: false,
+            minimal_maximized: false,
             dark: true,
             ui_scale: 1.0,
             math_size: 20.0,
@@ -125,6 +130,14 @@ impl Settings {
 impl Settings {
     pub fn size_for_mode(&self) -> [f32; 2] {
         clamp_size(if self.minimal { self.minimal_size } else { self.full_size }, self.min_size_for_mode())
+    }
+
+    pub fn maximized_for_mode(&self) -> bool {
+        if self.minimal {
+            self.minimal_maximized
+        } else {
+            self.full_maximized
+        }
     }
 
     pub fn min_size_for_mode(&self) -> [f32; 2] {
