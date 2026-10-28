@@ -1,0 +1,6 @@
+- Clean up minimal mode
+- Get a WASM build going
+- Get windows going
+- Test test test
+- Make an icon
+- Redo the readme in a human way
