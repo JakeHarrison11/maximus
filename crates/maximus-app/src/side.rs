@@ -6,6 +6,9 @@ use crate::icons::{self, Icon};
 use eframe::egui;
 use egui::{Key, RichText};
 use maximus_help::DocEntry;
+use maximus_math::Item;
+use maximus_render::editor::EditorState;
+use maximus_render::editor_ui::{math_editor, EditorStyle};
 
 impl MaximusApp {
     pub fn side_panel(&mut self, ui: &mut egui::Ui) {
@@ -17,12 +20,6 @@ impl MaximusApp {
             for (tab, label) in [(SideTab::Help, "Help"), (SideTab::Variables, "Variables"), (SideTab::Symbols, "Symbols"), (SideTab::Functions, "Functions")] {
                 ui.selectable_value(&mut self.tab, tab, label);
             }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if icons::icon_button(ui, Icon::ChevronRight, egui::vec2(22.0, 22.0), false).on_hover_text("Hide sidebar").clicked() {
-                    self.settings.side_panel = false;
-                    self.settings.save();
-                }
-            });
         });
         ui.separator();
         match self.tab {
@@ -106,61 +103,53 @@ impl MaximusApp {
             ui.label(RichText::new("No user-defined variables yet.\nTry  a: 5  or  f(x) := x^2").weak());
         }
         let color = ui.visuals().text_color();
-        egui::ScrollArea::vertical().id_salt("vars").max_height(ui.available_height() - 70.0).show(ui, |ui| {
+        let size = self.settings.math_size;
+        egui::ScrollArea::vertical().id_salt("vars").max_height((ui.available_height() - 150.0).max(80.0)).show(ui, |ui| {
             for v in &vars {
                 ui.horizontal_top(|ui| {
                     if icons::icon_button(ui, Icon::Close, egui::vec2(20.0, 20.0), false).on_hover_text("Delete").clicked() {
                         let name = v.name.clone();
                         self.session.remove_variable(&name);
                     }
-                    let editing = self.var_edit.as_ref().map_or(false, |(n, _)| *n == v.name);
+                    let editing = self.var_edit.as_ref().map_or(false, |e| e.name == v.name);
                     if editing {
-                        let (name, text) = self.var_edit.as_mut().unwrap();
-                        let r = ui.add(egui::TextEdit::singleline(text).font(egui::TextStyle::Monospace).desired_width((ui.available_width() - 8.0).max(60.0)));
-                        r.request_focus();
-                        if r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
-                            let (n, t) = (name.clone(), text.clone());
-                            if v.is_function {
-                                self.session.submit_raw(&format!("{}$", t.trim_end_matches([';', '$'])));
-                                self.session.refresh_variables();
-                            } else {
-                                self.session.set_variable(&n, &t);
-                            }
-                            self.var_edit = None;
+                        let mut edit = self.var_edit.take().unwrap();
+                        let id = ui.make_persistent_id(("var-edit", &v.name));
+                        if edit.fresh {
+                            ui.memory_mut(|m| m.request_focus(id));
+                            edit.fresh = false;
+                        }
+                        let style = EditorStyle::new(size, color);
+                        let out = math_editor(ui, id, &mut edit.editor, &style);
+                        if out.submit {
+                            self.commit_var_edit(edit);
                         } else if ui.input(|i| i.key_pressed(Key::Escape)) {
-                            self.var_edit = None;
+                            // cancelled
+                        } else {
+                            self.var_edit = Some(edit);
                         }
                     } else {
-                        egui::ScrollArea::horizontal().id_salt(("var-scroll", &v.name)).auto_shrink([false, true]).show(ui, |ui| {
-                            if v.is_function {
-                                match self.tree_for(&v.value) {
-                                    Some(t) => {
-                                        let r = maximus_render::show_math(ui, &t, 16.0, color);
-                                        if r.double_clicked() {
-                                            self.var_edit = Some((v.name.clone(), v.value.clone()));
-                                        }
-                                    }
-                                    None => {
-                                        ui.label(RichText::new(&v.value).monospace());
-                                    }
+                        // Names are always typeset (x_1 gets a subscript, alpha becomes a Greek letter).
+                        let row: Option<Vec<Item>> = if v.is_function {
+                            self.tree_for(&v.value).map(|t| (*t).clone())
+                        } else {
+                            self.tree_for(&v.value).map(|t| {
+                                let mut r = maximus_math::sym_row(&v.name);
+                                r.push(Item::Char('='));
+                                r.extend(t.iter().cloned());
+                                r
+                            })
+                        };
+                        egui::ScrollArea::horizontal().id_salt(("var-scroll", &v.name)).auto_shrink([false, true]).show(ui, |ui| match row {
+                            Some(r) => {
+                                let resp = maximus_render::show_math(ui, &r, size, color);
+                                if resp.double_clicked() {
+                                    self.start_var_edit(v);
                                 }
-                            } else {
-                                ui.horizontal(|ui| {
-                                    ui.label(RichText::new(&v.name).italics().strong());
-                                    ui.label("=");
-                                    match self.tree_for(&v.value) {
-                                        Some(t) => {
-                                            let r = maximus_render::show_math(ui, &t, 16.0, color);
-                                            if r.double_clicked() {
-                                                self.var_edit = Some((v.name.clone(), v.value.clone()));
-                                            }
-                                            r.on_hover_text("Double-click to edit");
-                                        }
-                                        None => {
-                                            ui.label(RichText::new(&v.value).monospace());
-                                        }
-                                    }
-                                });
+                                resp.on_hover_text("Double-click to edit");
+                            }
+                            None => {
+                                ui.label(RichText::new(format!("{} = {}", v.name, v.value)).monospace());
                             }
                         });
                     }
@@ -170,17 +159,87 @@ impl MaximusApp {
         });
         ui.separator();
         ui.label("Define variable");
-        ui.horizontal(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut self.new_var.0).hint_text("name").desired_width(70.0));
-            ui.label(":");
-            let r = ui.add(egui::TextEdit::singleline(&mut self.new_var.1).hint_text("value").font(egui::TextStyle::Monospace).desired_width((ui.available_width() - 56.0).max(40.0)));
-            let go = r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
-            if (go || ui.button("Set").clicked()) && !self.new_var.0.trim().is_empty() && !self.new_var.1.trim().is_empty() {
-                let (n, v) = (self.new_var.0.trim().to_string(), self.new_var.1.trim().to_string());
-                self.session.set_variable(&n, &v);
-                self.new_var = (String::new(), String::new());
+        let mut define = false;
+        ui.horizontal_top(|ui| {
+            let total = ui.available_width();
+            let style = EditorStyle::new(size * 0.9, color);
+            let name_id = ui.make_persistent_id("new-var-name");
+            let value_id = ui.make_persistent_id("new-var-value");
+            let mut s1 = style.clone_with_hint("name");
+            s1.min_height = 0.0;
+            ui.allocate_ui(egui::vec2(total * 0.3, 0.0), |ui| {
+                let out = math_editor(ui, name_id, &mut self.new_var_name, &s1);
+                if out.submit {
+                    ui.memory_mut(|m| m.request_focus(value_id));
+                }
+            });
+            ui.label("=");
+            let s2 = style.clone_with_hint("value");
+            let w = (ui.available_width() - 56.0).max(60.0);
+            ui.allocate_ui(egui::vec2(w, 0.0), |ui| {
+                let out = math_editor(ui, value_id, &mut self.new_var_value, &s2);
+                if out.submit {
+                    define = true;
+                }
+            });
+            if ui.button("Set").clicked() {
+                define = true;
             }
         });
+        if define {
+            self.define_variable();
+        }
+    }
+
+    /// Starts editing a variable or function definition as textbook input.
+    fn start_var_edit(&mut self, v: &maximus_core::VarInfo) {
+        let latex = if v.is_function {
+            maximus_math::maxima_script_to_latex(&v.value)
+        } else {
+            maximus_math::maxima_to_latex(&v.value)
+        }
+        .unwrap_or_else(|_| v.value.clone());
+        self.var_edit = Some(VarEdit { name: v.name.clone(), is_function: v.is_function, editor: EditorState::from_latex(&latex), fresh: true });
+    }
+
+    fn commit_var_edit(&mut self, e: VarEdit) {
+        let ctx = self.session.parse_ctx();
+        if e.is_function {
+            match maximus_math::tree_to_maxima(&e.editor.row, &ctx) {
+                Ok(code) => {
+                    self.session.submit_raw(&format!("{}$", code.trim_end_matches(';')));
+                    self.session.refresh_variables();
+                }
+                Err(err) => self.messages.push(format!("Cannot define {}: {}", e.name, err)),
+            }
+        } else {
+            match maximus_math::tree_to_plain_maxima(&e.editor.row, &ctx) {
+                Ok(value) => self.session.set_variable(&e.name, &value),
+                Err(err) => self.messages.push(format!("Cannot set {}: {}", e.name, err)),
+            }
+        }
+    }
+
+    fn define_variable(&mut self) {
+        let name = match variable_name_from_row(&self.new_var_name.row) {
+            Ok(n) => n,
+            Err(e) => {
+                self.messages.push(e);
+                return;
+            }
+        };
+        if self.new_var_value.row.is_empty() {
+            self.messages.push("Enter a value for the variable".into());
+            return;
+        }
+        match maximus_math::tree_to_plain_maxima(&self.new_var_value.row, &self.session.parse_ctx()) {
+            Ok(value) => {
+                self.session.set_variable(&name, &value);
+                self.new_var_name.clear();
+                self.new_var_value.clear();
+            }
+            Err(e) => self.messages.push(format!("Cannot set {}: {}", name, e)),
+        }
     }
 
     fn symbols_tab(&mut self, ui: &mut egui::Ui) {
@@ -300,5 +359,51 @@ impl MaximusApp {
             }
             self.manual_cats = cats;
         });
+    }
+}
+
+/// A variable name typed as textbook input: letters, digits and Greek letters, with an optional subscript.
+pub fn variable_name_from_row(row: &[Item]) -> Result<String, String> {
+    use maximus_math::words::greek_name_of_glyph;
+    let bad = || "A variable name is letters and digits, like x, mass, \u{3b1} or x_1".to_string();
+    if row.is_empty() {
+        return Err("Enter a name for the variable".into());
+    }
+    let mut name = String::new();
+    for it in row {
+        match it {
+            Item::Char(c) if c.is_ascii_alphanumeric() || *c == '_' => name.push(*c),
+            Item::Char(c) => name.push_str(greek_name_of_glyph(*c).ok_or_else(bad)?),
+            Item::Sub(s) => {
+                name.push('_');
+                for i in s {
+                    match i {
+                        Item::Char(c) if c.is_ascii_alphanumeric() => name.push(*c),
+                        _ => return Err(bad()),
+                    }
+                }
+            }
+            _ => return Err(bad()),
+        }
+    }
+    if name.chars().next().map_or(true, |c| c.is_ascii_digit() || c == '_') {
+        return Err(bad());
+    }
+    Ok(name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use maximus_math::row_from_str;
+
+    #[test]
+    fn variable_names_from_textbook_input() {
+        assert_eq!(variable_name_from_row(&row_from_str("mass")).unwrap(), "mass");
+        assert_eq!(variable_name_from_row(&[Item::Char('α')]).unwrap(), "alpha");
+        assert_eq!(variable_name_from_row(&[Item::Char('x'), Item::Sub(row_from_str("12"))]).unwrap(), "x_12");
+        assert!(variable_name_from_row(&row_from_str("2x")).is_err());
+        assert!(variable_name_from_row(&row_from_str("a+b")).is_err());
+        assert!(variable_name_from_row(&[]).is_err());
     }
 }

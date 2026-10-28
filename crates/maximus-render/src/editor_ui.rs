@@ -25,6 +25,11 @@ pub struct EditorStyle {
 }
 
 impl EditorStyle {
+    /// A copy with a different hint text.
+    pub fn clone_with_hint(&self, hint: &str) -> EditorStyle {
+        EditorStyle { size: self.size, color: self.color, hint: hint.to_string(), min_height: self.min_height }
+    }
+
     pub fn new(size: f32, color: Color32) -> Self {
         EditorStyle { size, color, hint: String::new(), min_height: 0.0 }
     }

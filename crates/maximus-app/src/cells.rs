@@ -44,10 +44,10 @@ impl MaximusApp {
             }
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if icons::icon_label_button(ui, Icon::Plus, "Code cell", true).clicked() {
+                if ui.button("+ Code cell").clicked() {
                     self.new_code_cell_at_end();
                 }
-                if icons::icon_label_button(ui, Icon::Plus, "Text cell", true).clicked() {
+                if ui.button("+ Text cell").clicked() {
                     let id = self.session.notebook.add_cell(CellKind::Text, InputMode::Maxima);
                     self.focus_cell = Some(id);
                 }

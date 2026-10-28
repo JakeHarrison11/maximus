@@ -7,7 +7,7 @@ pub mod semantic;
 pub mod tree;
 pub mod words;
 
-pub use expr::{expr_to_tree, to_maxima, to_maxima_with, Expr, PrintOpts};
+pub use expr::{expr_to_tree, sym_row, to_maxima, to_maxima_with, Expr, PrintOpts};
 pub use maxima_parse::{parse_maxima, split_statements};
 pub use semantic::{parse_tree, ParseCtx, Stmt};
 pub use tree::{closer_of, drop_single_semicolon, NC_MARK, from_latex, row_from_str, row_to_latex, BigOp, Item, Row};

@@ -27,6 +27,8 @@ pub struct Settings {
     pub full_size: [f32; 2],
     pub minimal_size: [f32; 2],
     pub dark: bool,
+    /// Overall interface scale (egui zoom factor).
+    pub ui_scale: f32,
     /// Font size of textbook math in points.
     pub math_size: f32,
     /// Empty means search `PATH`.
@@ -48,6 +50,7 @@ impl Default for Settings {
             full_size: DEFAULT_FULL_SIZE,
             minimal_size: DEFAULT_MINIMAL_SIZE,
             dark: true,
+            ui_scale: 1.0,
             math_size: 20.0,
             maxima_path: String::new(),
             plot_backend: PlotBackend::Egui,

@@ -12,7 +12,6 @@ pub enum Icon {
     Check,
     Cross,
     Backspace,
-    Plus,
     ChevronRight,
     ChevronLeft,
 }
@@ -47,11 +46,6 @@ pub fn draw_icon(ui: &Ui, icon: Icon, center: Pos2, size: f32, color: Color32) {
                 Pos2::new(center.x + 0.85 * s, center.y - 0.6 * s),
             ];
             p.add(Shape::line(pts, stroke));
-        }
-        Icon::Plus => {
-            let d = 0.75 * s;
-            p.line_segment([Pos2::new(center.x - d, center.y), Pos2::new(center.x + d, center.y)], stroke);
-            p.line_segment([Pos2::new(center.x, center.y - d), Pos2::new(center.x, center.y + d)], stroke);
         }
         Icon::ChevronRight | Icon::ChevronLeft => {
             let dir = if icon == Icon::ChevronRight { 1.0 } else { -1.0 };

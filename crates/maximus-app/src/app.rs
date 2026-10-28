@@ -26,6 +26,14 @@ pub enum Insert {
 }
 
 
+/// A variable or function definition being edited in the Variables tab.
+pub struct VarEdit {
+    pub name: String,
+    pub is_function: bool,
+    pub editor: EditorState,
+    pub fresh: bool,
+}
+
 pub struct CellUi {
     pub editor: EditorState,
     pub latex_view: bool,
@@ -81,8 +89,9 @@ pub struct MaximusApp {
     pub help_search: String,
     pub func_search: String,
     pub dialog: Option<CallDialog>,
-    pub var_edit: Option<(String, String)>,
-    pub new_var: (String, String),
+    pub var_edit: Option<VarEdit>,
+    pub new_var_name: EditorState,
+    pub new_var_value: EditorState,
     pub tree_cache: HashMap<String, Option<Arc<Row>>>,
     pub gnuplot_cache: HashMap<String, Result<PathBuf, String>>,
     pub file_dialog: Option<FileDialog>,
@@ -122,6 +131,7 @@ impl MaximusApp {
             settings.maxima_path = p.clone();
         }
         cc.egui_ctx.set_theme(if settings.dark { egui::ThemePreference::Dark } else { egui::ThemePreference::Light });
+        cc.egui_ctx.set_zoom_factor(settings.ui_scale.clamp(0.5, 3.0));
         cc.egui_ctx.all_styles_mut(|style| style.spacing.item_spacing = egui::vec2(6.0, 6.0));
 
         let help = HelpIndex::load_system();
@@ -145,7 +155,8 @@ impl MaximusApp {
             func_search: String::new(),
             dialog: None,
             var_edit: None,
-            new_var: (String::new(), String::new()),
+            new_var_name: EditorState::default(),
+            new_var_value: EditorState::default(),
             tree_cache: HashMap::new(),
             gnuplot_cache: HashMap::new(),
             file_dialog: None,
@@ -454,6 +465,11 @@ impl MaximusApp {
             self.settings.side_tab = self.tab;
             self.settings.save();
         }
+        let zoom = ctx.zoom_factor();
+        if (zoom - self.settings.ui_scale).abs() > 0.001 && !self.settings_open {
+            self.settings.ui_scale = zoom;
+            self.settings.save();
+        }
         if self.settings.minimal != self.last_mode {
             self.last_mode = self.settings.minimal;
             let [w, h] = self.settings.size_for_mode();
@@ -687,12 +703,6 @@ impl MaximusApp {
                 }
             });
             ui.menu_button("Help", |ui| {
-                if ui.button("Help for function under cursor").clicked() {
-                    if let Some(t) = self.help_topic.clone() {
-                        self.show_help(&t);
-                    }
-                    ui.close();
-                }
                 if ui.button("Plugins…").clicked() {
                     self.plugins_open = true;
                     ui.close();
@@ -795,7 +805,7 @@ impl MaximusApp {
             }
             ui.separator();
             for (label, kind) in [("Code", CellKind::Code), ("Text", CellKind::Text), ("Section", CellKind::Section)] {
-                if icons::icon_label_button(ui, Icon::Plus, label, true).clicked() {
+                if ui.button(format!("+ {}", label)).clicked() {
                     let id = if kind == CellKind::Code { self.add_code_cell(None, None) } else { self.session.notebook.add_cell(kind, InputMode::Maxima) };
                     self.active_cell = Some(id);
                     self.focus_cell = Some(id);
@@ -807,14 +817,13 @@ impl MaximusApp {
                 self.settings.minimal = true;
                 self.settings.save();
             }
-            if !self.settings.side_panel {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if icons::icon_button(ui, Icon::ChevronLeft, egui::vec2(24.0, 22.0), true).on_hover_text("Show sidebar").clicked() {
-                        self.settings.side_panel = true;
-                        self.settings.save();
-                    }
-                });
-            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let (icon, tip) = if self.settings.side_panel { (Icon::ChevronRight, "Hide sidebar") } else { (Icon::ChevronLeft, "Show sidebar") };
+                if icons::icon_button(ui, icon, egui::vec2(24.0, 22.0), true).on_hover_text(tip).clicked() {
+                    self.settings.side_panel = !self.settings.side_panel;
+                    self.settings.save();
+                }
+            });
         });
     }
 
@@ -1020,6 +1029,11 @@ impl MaximusApp {
                     self.apply_theme(ctx);
                 }
             });
+            let scale = ui.add(egui::Slider::new(&mut self.settings.ui_scale, 0.7..=2.0).text("UI scale").step_by(0.05));
+            if scale.drag_stopped() || (scale.changed() && !scale.dragged()) {
+                ctx.set_zoom_factor(self.settings.ui_scale);
+                changed = true;
+            }
             changed |= ui.add(egui::Slider::new(&mut self.settings.math_size, 12.0..=40.0).text("Math size")).changed();
             changed |= ui.checkbox(&mut self.settings.contextual_help, "Contextual help follows the cursor").changed();
             ui.separator();
