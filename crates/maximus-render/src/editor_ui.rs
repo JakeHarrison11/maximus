@@ -206,7 +206,7 @@ pub fn math_editor(ui: &mut egui::Ui, id: Id, state: &mut EditorState, style: &E
             style.color.gamma_multiply(0.4),
         );
     }
-    if let Some(sel) = state.selection() {
+    for sel in state.selection_segments() {
         let x_at = |pos: usize| b.marks.iter().find(|m| m.path == sel.path && m.pos == pos).map(|m| m.x);
         if let (Some(x0), Some(x1)) = (x_at(sel.start), x_at(sel.end)) {
             let (mut y0, mut y1) = (f32::MAX, f32::MIN);

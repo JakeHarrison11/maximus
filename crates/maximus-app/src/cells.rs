@@ -171,13 +171,13 @@ impl MaximusApp {
             c.source = new_source;
             c.mode = want_mode;
         }
-        // Rebuild the textbook editor from the (possibly converted) source, dropping needless brackets.
+        // Rebuild the textbook editor from the (possibly converted) source, dropping a lone trailing `;`.
         let src = self.session.notebook.cell(id).unwrap().source.clone();
         if let Some(cu) = self.cell_ui.get_mut(&id) {
             if want_mode == InputMode::Math && !want_latex {
-                cu.editor = maximus_render::editor::EditorState::from_latex_tidy(&src);
-                let tidy = cu.editor.latex();
-                self.session.notebook.cell_mut(id).unwrap().source = tidy;
+                cu.editor = maximus_render::editor::EditorState::from_latex_converted(&src);
+                let converted = cu.editor.latex();
+                self.session.notebook.cell_mut(id).unwrap().source = converted;
             }
             cu.latex_view = want_latex;
         }

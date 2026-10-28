@@ -103,10 +103,10 @@ impl EditorState {
         s
     }
 
-    /// Like [`Self::from_latex`] but drops brackets that do not change the meaning.
-    pub fn from_latex_tidy(src: &str) -> Self {
+    /// Like [`Self::from_latex`] for converted input: a lone trailing `;` is dropped.
+    pub fn from_latex_converted(src: &str) -> Self {
         let mut s = Self::from_latex(src);
-        s.row = maximus_math::tidy_parens(std::mem::take(&mut s.row));
+        s.row = maximus_math::drop_single_semicolon(std::mem::take(&mut s.row));
         s.cur = Cursor { path: vec![], pos: s.row.len() };
         s
     }
@@ -328,7 +328,7 @@ impl EditorState {
         let Some(row) = row_at(&mut self.row, path) else { return (0, 0) };
         let Item::Group(o, c, body) = row.remove(idx) else { return (0, 0) };
         let n = body.len();
-        let keep = if o == '|' || body.is_empty() { None } else { keep };
+        let keep = if o == '|' { None } else { keep };
         let mut items: Vec<Item> = Vec::new();
         let mut offset = 0;
         if keep == Some(true) {
@@ -471,10 +471,10 @@ impl EditorState {
         let looks_latex = t.contains('\\') || t.starts_with('$') || t.contains("^{") || t.contains("_{") || t.contains("\\(");
         if !looks_latex {
             if let Ok(e) = parse_maxima(t) {
-                return maximus_math::tidy_parens(expr_to_tree(&e));
+                return maximus_math::drop_single_semicolon(expr_to_tree(&e));
             }
         }
-        maximus_math::tidy_parens(from_latex(t))
+        maximus_math::drop_single_semicolon(from_latex(t))
     }
 
     pub fn paste(&mut self, text: &str) {
@@ -842,6 +842,34 @@ pub enum Wrap {
     Group(char),
 }
 
+fn cmp_cursor(a: &Cursor, b: &Cursor) -> std::cmp::Ordering {
+    use std::cmp::Ordering::*;
+    let n = a.path.len().min(b.path.len());
+    for j in 0..n {
+        if a.path[j] != b.path[j] {
+            return a.path[j].cmp(&b.path[j]);
+        }
+    }
+    match a.path.len().cmp(&b.path.len()) {
+        Equal => a.pos.cmp(&b.pos),
+        // `a` sits in the row that holds the item `b` is inside of.
+        Less => {
+            if a.pos <= b.path[n].0 {
+                Less
+            } else {
+                Greater
+            }
+        }
+        Greater => {
+            if b.pos <= a.path[n].0 {
+                Greater
+            } else {
+                Less
+            }
+        }
+    }
+}
+
 impl EditorState {
     fn endpoint_valid(&mut self, c: &Cursor) -> bool {
         match row_at(&mut self.row, &c.path) {
@@ -850,36 +878,89 @@ impl EditorState {
         }
     }
 
-    /// The current selection, as whole items of the deepest row containing both ends.
-    /// An end that sits inside a structure (say a denominator) selects that whole structure.
-    pub fn selection(&mut self) -> Option<Selection> {
+    fn is_bracket_item(&mut self, path: &[(usize, usize)], idx: usize) -> bool {
+        matches!(row_at(&mut self.row, path).and_then(|r| r.get(idx)), Some(Item::Group(o, _, _)) if *o != '|')
+    }
+
+    /// If the end `e` sits inside a structure other than a bracket pair, the whole outermost such
+    /// structure counts as selected: returns the cursor just before it (`after == false`) or after it.
+    fn snap_to_structure(&mut self, e: &Cursor, from_depth: usize, after: bool) -> Cursor {
+        for t in from_depth..e.path.len() {
+            let idx = e.path[t].0;
+            if !self.is_bracket_item(&e.path[..t], idx) {
+                return Cursor { path: e.path[..t].to_vec(), pos: idx + after as usize };
+            }
+        }
+        e.clone()
+    }
+
+    /// The two ends of the selection in document order, with ends inside fractions, roots and the like
+    /// moved to the edge of that structure. Brackets are see-through, so selecting over them selects
+    /// only the terms passed, not everything inside.
+    fn selection_bounds(&mut self) -> Option<(Cursor, Cursor)> {
         let a = self.anchor.clone()?;
         let c = self.cur.clone();
         if a == c || !self.endpoint_valid(&a) || !self.endpoint_valid(&c) {
             return None;
         }
-        let k = a.path.iter().zip(c.path.iter()).take_while(|(x, y)| x == y).count();
-        let span = |e: &Cursor| -> (usize, usize) {
-            if e.path.len() > k {
-                (e.path[k].0, e.path[k].0 + 1)
-            } else {
-                (e.pos, e.pos)
-            }
-        };
-        let (a0, a1) = span(&a);
-        let (c0, c1) = span(&c);
-        let (start, end) = (a0.min(c0), a1.max(c1));
-        (start < end).then(|| Selection { path: a.path[..k].to_vec(), start, end })
+        let (lo, hi) = if cmp_cursor(&a, &c) == std::cmp::Ordering::Less { (a, c) } else { (c, a) };
+        let k = lo.path.iter().zip(hi.path.iter()).take_while(|(x, y)| x == y).count();
+        let lo2 = self.snap_to_structure(&lo, k, false);
+        let hi2 = self.snap_to_structure(&hi, k, true);
+        (lo2 != hi2).then_some((lo2, hi2))
+    }
+
+    /// The selection as runs of items in document order. It is more than one run when it starts or ends
+    /// inside a bracket pair.
+    pub fn selection_segments(&mut self) -> Vec<Selection> {
+        let Some((lo, hi)) = self.selection_bounds() else { return vec![] };
+        let k = lo.path.iter().zip(hi.path.iter()).take_while(|(x, y)| x == y).count();
+        let mut segs: Vec<Selection> = Vec::new();
+        let len_of = |s: &mut Self, p: &[(usize, usize)]| row_at(&mut s.row, p).map_or(0, |r| r.len());
+        // Start side, innermost row first.
+        for d in (k + 1..=lo.path.len()).rev() {
+            let path = lo.path[..d].to_vec();
+            let start = if d == lo.path.len() { lo.pos } else { lo.path[d].0 + 1 };
+            let end = len_of(self, &path);
+            segs.push(Selection { path, start, end });
+        }
+        // The row both ends share.
+        let start = if lo.path.len() > k { lo.path[k].0 + 1 } else { lo.pos };
+        let end = if hi.path.len() > k { hi.path[k].0 } else { hi.pos };
+        segs.push(Selection { path: lo.path[..k].to_vec(), start, end });
+        // End side, outermost row first.
+        for d in k + 1..=hi.path.len() {
+            let path = hi.path[..d].to_vec();
+            let end = if d == hi.path.len() { hi.pos } else { hi.path[d].0 };
+            segs.push(Selection { path, start: 0, end });
+        }
+        segs.retain(|s| s.start < s.end);
+        segs
+    }
+
+    /// The selection when it is a single run of items.
+    pub fn selection(&mut self) -> Option<Selection> {
+        let mut s = self.selection_segments();
+        (s.len() == 1).then(|| s.remove(0))
     }
 
     pub fn has_selection(&mut self) -> bool {
-        self.selection().is_some()
+        !self.selection_segments().is_empty()
     }
 
-    /// The selected items.
+    /// The selected items, joined in document order.
     pub fn selected_row(&mut self) -> Option<Row> {
-        let s = self.selection()?;
-        row_at(&mut self.row, &s.path).map(|r| r[s.start..s.end].to_vec())
+        let segs = self.selection_segments();
+        if segs.is_empty() {
+            return None;
+        }
+        let mut out: Row = Vec::new();
+        for s in segs {
+            if let Some(r) = row_at(&mut self.row, &s.path) {
+                out.extend(r[s.start..s.end].iter().cloned());
+            }
+        }
+        Some(out)
     }
 
     /// LaTeX of the selection, if there is one.
@@ -893,14 +974,18 @@ impl EditorState {
 
     /// Removes the selected items. Returns whether anything was selected.
     pub fn delete_selection(&mut self) -> bool {
-        let Some(s) = self.selection() else {
+        let Some((lo, _)) = self.selection_bounds() else {
             self.anchor = None;
             return false;
         };
-        if let Some(r) = row_at(&mut self.row, &s.path) {
-            r.drain(s.start..s.end);
+        let segs = self.selection_segments();
+        // Last run first, so earlier positions stay valid.
+        for s in segs.iter().rev() {
+            if let Some(r) = row_at(&mut self.row, &s.path) {
+                r.drain(s.start..s.end);
+            }
         }
-        self.cur = Cursor { path: s.path, pos: s.start };
+        self.cur = lo;
         self.anchor = None;
         true
     }
@@ -936,7 +1021,7 @@ impl EditorState {
         }
     }
 
-    /// Replaces the selection by `wrap` around it. Returns false when nothing is selected.
+    /// Replaces the selection by `wrap` around it. Returns false unless one run of items is selected.
     pub fn wrap_selection(&mut self, wrap: Wrap) -> bool {
         let Some(s) = self.selection() else { return false };
         let Some(row) = row_at(&mut self.row, &s.path) else { return false };
@@ -976,11 +1061,11 @@ impl EditorState {
 
     /// Collapses the selection to its left or right edge (what the arrow keys do).
     pub fn collapse_selection(&mut self, to_end: bool) -> bool {
-        let Some(s) = self.selection() else {
+        let Some((lo, hi)) = self.selection_bounds() else {
             self.anchor = None;
             return false;
         };
-        self.cur = Cursor { path: s.path, pos: if to_end { s.end } else { s.start } };
+        self.cur = if to_end { hi } else { lo };
         self.anchor = None;
         true
     }
@@ -1082,11 +1167,26 @@ mod tests {
         let mut e = typed("(ab");
         e.delete_forward();
         assert_eq!(e.latex(), "(ab");
-        // An empty pair disappears completely, and bars always go together.
+        // Even an empty pair leaves its opposite behind; a second backspace removes that one.
         let mut e = typed("()");
         e.cur = Cursor { path: vec![], pos: 1 };
         e.backspace();
+        assert_eq!(e.latex(), "(");
+        e.backspace();
         assert!(e.row.is_empty());
+        let mut e = typed("()");
+        e.cur = Cursor { path: vec![(0, 0)], pos: 0 };
+        e.backspace();
+        assert_eq!(e.latex(), ")");
+        let mut e = typed("()");
+        e.cur = Cursor { path: vec![], pos: 0 };
+        e.delete_forward();
+        assert_eq!(e.latex(), ")");
+        let mut e = typed("(");
+        e.cur = Cursor { path: vec![(0, 0)], pos: 0 };
+        e.delete_forward();
+        assert_eq!(e.latex(), "(");
+        // Bars always go together.
         let mut e = typed("|ab|");
         e.cur = Cursor { path: vec![], pos: 1 };
         e.backspace();
@@ -1264,5 +1364,93 @@ mod selection_tests {
         // A stale anchor (for example after the row changed) yields no selection.
         e.anchor = Some(Cursor { path: vec![(9, 0)], pos: 0 });
         assert_eq!(e.selection(), None);
+    }
+}
+
+#[cfg(test)]
+mod bracket_selection_tests {
+    use super::*;
+
+    fn typed(s: &str) -> EditorState {
+        let mut e = EditorState::default();
+        e.type_text(s);
+        e
+    }
+
+    fn latex_of(rows: Option<Row>) -> Option<String> {
+        rows.map(|r| row_to_latex(&r))
+    }
+
+    #[test]
+    fn selecting_into_brackets_selects_only_the_terms_passed() {
+        let mut e = typed("a(b+c)d");
+        e.cur = Cursor { path: vec![], pos: 4 };
+        // From before `a` into the bracket, after `b+`.
+        e.anchor = Some(Cursor { path: vec![], pos: 0 });
+        e.cur = Cursor { path: vec![(1, 0)], pos: 2 };
+        let segs = e.selection_segments();
+        assert_eq!(
+            segs,
+            vec![Selection { path: vec![], start: 0, end: 1 }, Selection { path: vec![(1, 0)], start: 0, end: 2 }]
+        );
+        assert_eq!(latex_of(e.selected_row()).as_deref(), Some("ab+"));
+        assert!(e.delete_selection());
+        assert_eq!(e.latex(), "\\left( c \\right)d");
+        assert_eq!(e.cur, Cursor { path: vec![], pos: 0 });
+    }
+
+    #[test]
+    fn selecting_out_of_brackets_and_across_them() {
+        let mut e = typed("a(b+c)d");
+        // From inside after `b` to after `d`.
+        e.anchor = Some(Cursor { path: vec![(1, 0)], pos: 1 });
+        e.cur = Cursor { path: vec![], pos: 3 };
+        assert_eq!(
+            e.selection_segments(),
+            vec![Selection { path: vec![(1, 0)], start: 1, end: 3 }, Selection { path: vec![], start: 2, end: 3 }]
+        );
+        // The same selection built in the other direction is identical.
+        let mut f = typed("a(b+c)d");
+        f.anchor = Some(Cursor { path: vec![], pos: 3 });
+        f.cur = Cursor { path: vec![(1, 0)], pos: 1 };
+        assert_eq!(f.selection_segments(), e.selection_segments());
+        assert!(e.delete_selection());
+        assert_eq!(e.latex(), "a\\left( b \\right)");
+        // Through the whole bracket from outside to outside selects the bracket pair as a whole item.
+        let mut g = typed("a(b+c)d");
+        g.anchor = Some(Cursor { path: vec![], pos: 0 });
+        g.cur = Cursor { path: vec![], pos: 3 };
+        assert_eq!(g.selection_segments(), vec![Selection { path: vec![], start: 0, end: 3 }]);
+    }
+
+    #[test]
+    fn selecting_inside_a_bracket_only_stays_there() {
+        let mut e = typed("(abc)");
+        e.anchor = Some(Cursor { path: vec![(0, 0)], pos: 1 });
+        e.cur = Cursor { path: vec![(0, 0)], pos: 3 };
+        assert_eq!(e.selection_segments(), vec![Selection { path: vec![(0, 0)], start: 1, end: 3 }]);
+    }
+
+    #[test]
+    fn fractions_inside_brackets_still_select_whole() {
+        let mut e = typed("x(1/2)");
+        // From before x to inside the denominator, which is inside the bracket.
+        e.anchor = Some(Cursor { path: vec![], pos: 0 });
+        e.cur = Cursor { path: vec![(1, 0), (0, 1)], pos: 1 };
+        let segs = e.selection_segments();
+        assert_eq!(segs, vec![Selection { path: vec![], start: 0, end: 1 }, Selection { path: vec![(1, 0)], start: 0, end: 1 }]);
+    }
+
+    #[test]
+    fn collapse_goes_to_the_real_edges() {
+        let mut e = typed("a(b+c)d");
+        e.anchor = Some(Cursor { path: vec![], pos: 0 });
+        e.cur = Cursor { path: vec![(1, 0)], pos: 2 };
+        assert!(e.collapse_selection(true));
+        assert_eq!(e.cur, Cursor { path: vec![(1, 0)], pos: 2 });
+        e.anchor = Some(Cursor { path: vec![], pos: 0 });
+        e.cur = Cursor { path: vec![(1, 0)], pos: 2 };
+        assert!(e.collapse_selection(false));
+        assert_eq!(e.cur, Cursor { path: vec![], pos: 0 });
     }
 }

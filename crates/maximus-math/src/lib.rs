@@ -10,7 +10,7 @@ pub mod words;
 pub use expr::{expr_to_tree, to_maxima, to_maxima_with, Expr, PrintOpts};
 pub use maxima_parse::{parse_maxima, split_statements};
 pub use semantic::{parse_tree, ParseCtx, Stmt};
-pub use tree::{closer_of, tidy_parens, NC_MARK, from_latex, row_from_str, row_to_latex, BigOp, Item, Row};
+pub use tree::{closer_of, drop_single_semicolon, NC_MARK, from_latex, row_from_str, row_to_latex, BigOp, Item, Row};
 
 /// Converts a textbook tree to a Maxima script (statements terminated with `;` or `$`).
 pub fn tree_to_maxima(row: &[Item], ctx: &ParseCtx) -> Result<String, String> {
@@ -40,7 +40,7 @@ pub fn maxima_script_to_tree(src: &str) -> Result<Row, String> {
         out.extend(maxima_to_tree(&stmt).map_err(|e| format!("{} (in `{}`)", e, stmt))?);
         out.push(Item::Char(term));
     }
-    Ok(tidy_parens(out))
+    Ok(drop_single_semicolon(out))
 }
 
 /// Converts a Maxima script to LaTeX.
@@ -182,26 +182,19 @@ mod demo_tests {
 }
 
 #[cfg(test)]
-mod tidy_tests {
+mod conversion_tests {
     use super::*;
 
-    fn tidy(latex: &str) -> String {
-        row_to_latex(&tidy_parens(from_latex(latex)))
-    }
-
     #[test]
-    fn removes_only_unneeded_brackets() {
-        assert_eq!(tidy("(x+1)"), "x+1");
-        assert_eq!(tidy("((x+1))"), "x+1");
-        assert_eq!(tidy("a+(b)"), "a+b");
-        assert_eq!(tidy("(x)^2"), "x^{2}");
-        assert_eq!(tidy(r"\frac{(a+b)}{c}"), r"\frac{a+b}{c}");
-        assert_eq!(tidy("(a+b)(c+d)"), r"\left( a+b \right)\left( c+d \right)");
-        // Function arguments and needed grouping stay.
-        assert_eq!(tidy(r"\sin(x)"), r"\sin \left( x \right)");
-        assert_eq!(tidy("f(x)"), r"f\left( x \right)");
-        assert_eq!(tidy("(a+b)^2"), r"\left( a+b \right)^{2}");
-        assert_eq!(tidy("(x+1);(y+2)"), "x+1;y+2");
+    fn single_statement_loses_its_semicolon() {
+        let l = maxima_script_to_latex("integrate(x^2,x);").unwrap();
+        assert!(!l.contains(';') && l.ends_with("dx"), "{l}");
+        // `$` hides the output, so it stays; several statements keep their separators.
+        assert!(maxima_script_to_latex("a:5$").unwrap().ends_with("$"));
+        assert!(maxima_script_to_latex("a:5; b:6;").unwrap().contains(';'));
+        // The round trip still evaluates the same.
+        let l = maxima_script_to_latex("diff(sin(x),x);").unwrap();
+        assert_eq!(latex_to_maxima(&l, &ParseCtx::default()).unwrap(), "diff(sin(x),x);");
     }
 
     #[test]

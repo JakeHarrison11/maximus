@@ -629,80 +629,14 @@ fn make_group(o: char, c: char, body: Row) -> Item {
     Item::Group(o, c, body)
 }
 
-fn is_atom_item(it: &Item) -> bool {
-    matches!(it, Item::Char(c) if c.is_alphanumeric() || *c == '.' || *c == '∞' || *c == 'ⅇ' || *c == 'ⅈ') || matches!(it, Item::Func(_))
-}
-
-/// Removes brackets that change nothing: around a whole statement, around a single atom that is
-/// not a function argument, and doubled brackets. Function arguments are always kept.
-pub fn tidy_parens(row: Row) -> Row {
-    // Whole-statement brackets: split at terminators, unwrap a statement that is one `( ... )` group.
-    let mut out: Row = Vec::new();
-    let mut stmt: Row = Vec::new();
-    let flush = |stmt: &mut Row, out: &mut Row, term: Option<Item>| {
-        let mut s = std::mem::take(stmt);
-        while let [Item::Group('(', _, _)] = s.as_slice() {
-            let Item::Group(_, _, body) = s.remove(0) else { unreachable!() };
-            s = body;
-        }
-        out.extend(s);
-        if let Some(t) = term {
-            out.push(t);
-        }
-    };
-    for it in row {
-        match it {
-            Item::Char(c @ (';' | '$')) => flush(&mut stmt, &mut out, Some(Item::Char(c))),
-            it => stmt.push(it),
-        }
+/// A single statement does not need its terminator: drops a trailing `;` when it is the only
+/// statement terminator in the row (a `$` is kept, since it hides the result).
+pub fn drop_single_semicolon(mut row: Row) -> Row {
+    let terminators = row.iter().filter(|i| matches!(i, Item::Char(';' | '$'))).count();
+    if terminators == 1 && matches!(row.last(), Some(Item::Char(';'))) {
+        row.pop();
     }
-    flush(&mut stmt, &mut out, None);
-    tidy_inner(out)
-}
-
-fn tidy_inner(row: Row) -> Row {
-    let mut out: Row = Vec::with_capacity(row.len());
-    for it in row {
-        let it = match it {
-            Item::Frac(a, b) => Item::Frac(tidy_slot(a), tidy_slot(b)),
-            Item::Sup(a) => Item::Sup(tidy_slot(a)),
-            Item::Sub(a) => Item::Sub(tidy_slot(a)),
-            Item::Sqrt(i, b) => Item::Sqrt(i.map(tidy_slot), tidy_slot(b)),
-            Item::Big(o, a, b) => Item::Big(o, tidy_slot(a), tidy_slot(b)),
-            Item::Matrix(m) => Item::Matrix(m.into_iter().map(|r| r.into_iter().map(tidy_slot).collect()).collect()),
-            Item::Group(o, c, b) => Item::Group(o, c, tidy_inner(b)),
-            it => it,
-        };
-        // A group directly after an operand is a call (`f(x)`), so it stays.
-        let after_operand = out.last().map_or(false, |p| is_atom_item(p) || matches!(p, Item::Group(..) | Item::Sup(_) | Item::Sub(_) | Item::Frac(..) | Item::Sqrt(..)));
-        match it {
-            Item::Group('(', _, mut body) if !after_operand => {
-                // Doubled brackets collapse; a bracket around one atom disappears.
-                while let [Item::Group('(', _, _)] = body.as_slice() {
-                    let Item::Group(_, _, inner) = body.remove(0) else { unreachable!() };
-                    body = inner;
-                }
-                let single = body.len() == 1 && is_atom_item(&body[0]) || (!body.is_empty() && body.iter().all(|i| matches!(i, Item::Char(c) if c.is_ascii_digit() || *c == '.')));
-                if single {
-                    out.extend(body);
-                } else {
-                    out.push(Item::Group('(', ')', body));
-                }
-            }
-            it => out.push(it),
-        }
-    }
-    out
-}
-
-fn tidy_slot(r: Row) -> Row {
-    // Inside a slot the whole content is one expression, so outer brackets are redundant.
-    let mut r = tidy_inner(r);
-    while let [Item::Group('(', _, _)] = r.as_slice() {
-        let Item::Group(_, _, body) = r.remove(0) else { unreachable!() };
-        r = tidy_inner(body);
-    }
-    r
+    row
 }
 
 /// Parses LaTeX (math mode content) into a tree.
