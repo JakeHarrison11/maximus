@@ -32,6 +32,8 @@ Keyboard: `Enter` evaluates a textbook cell, `Shift+Enter` evaluates a Maxima/La
 
 ## Layout
 
+Contributors and coding agents: see [AGENTS.md](AGENTS.md) for architecture, workflows and gotchas.
+
 | crate | role |
 | --- | --- |
 | `maximus-math` | math tree, LaTeX ⇄ tree ⇄ Maxima conversion |
