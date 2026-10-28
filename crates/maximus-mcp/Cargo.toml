@@ -1,0 +1,15 @@
+[package]
+name = "maximus-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+maximus-core.workspace = true
+maximus-math.workspace = true
+maximus-help.workspace = true
+maximus-plot.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+maximus-backend-native.workspace = true

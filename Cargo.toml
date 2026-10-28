@@ -1,0 +1,28 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/maximus-core",
+    "crates/maximus-math",
+    "crates/maximus-backend-native",
+    "crates/maximus-help",
+    "crates/maximus-render",
+    "crates/maximus-plot",
+    "crates/maximus-mcp",
+    "crates/maximus-app",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+maximus-core = { path = "crates/maximus-core" }
+maximus-math = { path = "crates/maximus-math" }
+maximus-render = { path = "crates/maximus-render" }
+maximus-backend-native = { path = "crates/maximus-backend-native" }
+maximus-help = { path = "crates/maximus-help" }
+maximus-plot = { path = "crates/maximus-plot" }
+maximus-mcp = { path = "crates/maximus-mcp" }

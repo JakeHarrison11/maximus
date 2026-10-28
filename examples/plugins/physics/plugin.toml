@@ -1,0 +1,18 @@
+name = "Physics"
+version = "0.1.0"
+description = "Example plugin: constants, a helper function and a symbol palette."
+maxima_files = ["physics.mac"]
+
+[[palette]]
+name = "Physics"
+symbols = ["ℏ", "Å", "∇", "∂"]
+
+[[menu]]
+category = "Physics"
+label = "Kinetic energy"
+template = "kinetic_energy(<m=2>, <v=3>)"
+description = "m v^2 / 2"
+
+[[snippet]]
+label = "Quadratic formula"
+code = "solve(a*x^2+b*x+c=0,x)"

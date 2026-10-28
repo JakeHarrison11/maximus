@@ -1,0 +1,11 @@
+[package]
+name = "maximus-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+maximus-math.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml = "0.8"

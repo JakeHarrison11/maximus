@@ -1,0 +1,11 @@
+[package]
+name = "maximus-plot"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+maximus-core.workspace = true
+maximus-math.workspace = true
+egui = "0.37"
+egui_plot = "0.38"
