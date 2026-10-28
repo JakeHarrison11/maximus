@@ -1,0 +1,350 @@
+{
+  "version": 1,
+  "cells": [
+    {
+      "id": 1,
+      "kind": "Title",
+      "mode": "Maxima",
+      "source": "Maximus demo",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 2,
+      "kind": "Text",
+      "mode": "Maxima",
+      "source": "A tour of Maximus. Press Ctrl+Shift+Enter (or the Evaluate all button) to run every cell, or click into a cell and press Enter to run just that one. Cells can be edited, moved, duplicated and re-run in any order without restarting Maxima.",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 3,
+      "kind": "Section",
+      "mode": "Maxima",
+      "source": "Textbook input",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 4,
+      "kind": "Text",
+      "mode": "Maxima",
+      "source": "Type math the way you write it: / makes a fraction, ^ a power, _ a subscript, sqrt( a root. The two cells below are the same calculation, one typed as math and one as a Maxima function call, and they give the same result.",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 5,
+      "kind": "Code",
+      "mode": "Math",
+      "source": "\\int_0^{\\pi}\\!x\\sin^2\\left(x\\right)\\,\\mathrm{d}x",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 6,
+      "kind": "Code",
+      "mode": "Math",
+      "source": "integrate(x\\sin^2(x),x,0,\\pi)",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 7,
+      "kind": "Text",
+      "mode": "Maxima",
+      "source": "Derivatives, sums, limits and integrals without limits:",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 8,
+      "kind": "Code",
+      "mode": "Math",
+      "source": "\\frac{d}{dx}\\left(x^2\\sin x\\right)",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 9,
+      "kind": "Code",
+      "mode": "Math",
+      "source": "\\sum_{n=1}^{\\infty}\\frac{1}{n^2}",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 10,
+      "kind": "Code",
+      "mode": "Math",
+      "source": "\\lim_{x\\to 0}\\frac{\\sin x}{x}",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 11,
+      "kind": "Code",
+      "mode": "Math",
+      "source": "\\int \\frac{1}{x^2+1}\\,dx",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 12,
+      "kind": "Code",
+      "mode": "Math",
+      "source": "\\sqrt[3]{27}+e^{i\\pi}",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 13,
+      "kind": "Code",
+      "mode": "Math",
+      "source": "\\alpha^2+\\beta^2",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 14,
+      "kind": "Text",
+      "mode": "Maxima",
+      "source": "Any Maxima function works the traditional way too, with math as its arguments:",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 15,
+      "kind": "Code",
+      "mode": "Math",
+      "source": "factor(x^2-1)",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 16,
+      "kind": "Code",
+      "mode": "Math",
+      "source": "expand((x+1)^5)",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 17,
+      "kind": "Code",
+      "mode": "Math",
+      "source": "solve(x^2-4=0,x)",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 18,
+      "kind": "Code",
+      "mode": "Math",
+      "source": "\\mathrm{ilt}(\\frac{1}{s+a},s,t)",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 19,
+      "kind": "Text",
+      "mode": "Maxima",
+      "source": "Use the cell menu (the three dots) to switch a cell between textbook input, Maxima input and LaTeX source. Conversions go both ways, and you can paste LaTeX or Maxima into a textbook cell and copy back out as either.",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 20,
+      "kind": "Section",
+      "mode": "Maxima",
+      "source": "Maxima input",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 21,
+      "kind": "Code",
+      "mode": "Maxima",
+      "source": "a: 5$\nf(x) := x^2 + a$\nf(3);",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 22,
+      "kind": "Code",
+      "mode": "Maxima",
+      "source": "solve(x^3 - 2*x = 0, x);",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 23,
+      "kind": "Code",
+      "mode": "Maxima",
+      "source": "diff(sin(x)^2, x);",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 24,
+      "kind": "Code",
+      "mode": "Maxima",
+      "source": "b: [1,2,3]$ g: sqrt(2)/3$",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 25,
+      "kind": "Text",
+      "mode": "Maxima",
+      "source": "The Variables tab in the side panel now lists a, b, g and f. Double-click a value to edit it, use the x to delete one, or Reset all to forget everything.",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 26,
+      "kind": "Section",
+      "mode": "Maxima",
+      "source": "Matrices",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 27,
+      "kind": "Text",
+      "mode": "Maxima",
+      "source": "Insert a matrix of any size from Symbols > Structures > Matrix. Tab moves between cells; right-click inside a matrix to add or remove rows and columns.",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 28,
+      "kind": "Code",
+      "mode": "Math",
+      "source": "\\begin{pmatrix}1&2\\\\3&4\\end{pmatrix}",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 29,
+      "kind": "Code",
+      "mode": "Maxima",
+      "source": "matrix([1,2],[3,4])^^-1;",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 30,
+      "kind": "Code",
+      "mode": "Maxima",
+      "source": "determinant(matrix([1,2],[3,4])); eigenvalues(matrix([1,2],[3,4]));",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 31,
+      "kind": "Section",
+      "mode": "Maxima",
+      "source": "Plots",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 32,
+      "kind": "Text",
+      "mode": "Maxima",
+      "source": "Plots are drawn with egui_plot. Hover to see coordinates and snap to zeros, extrema and intercepts. Drag to pan, Ctrl+scroll or the buttons to zoom, right-drag for a zoom box, double-click to reset. gnuplot can be chosen in Settings.",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 33,
+      "kind": "Code",
+      "mode": "Maxima",
+      "source": "plot2d([sin(x), cos(x), sin(x)*cos(x)], [x, -6, 6])$",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 34,
+      "kind": "Code",
+      "mode": "Maxima",
+      "source": "plot2d([parametric, cos(t), sin(t), [t, 0, 2*%pi]])$",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 35,
+      "kind": "Code",
+      "mode": "Maxima",
+      "source": "plot2d([discrete, [1,2,3,4,5], [2,4,3,6,5]])$",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 36,
+      "kind": "Code",
+      "mode": "Maxima",
+      "source": "plot3d(sin(x)*cos(y), [x, -3, 3], [y, -3, 3])$",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 37,
+      "kind": "Section",
+      "mode": "Maxima",
+      "source": "Numbers",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 38,
+      "kind": "Code",
+      "mode": "Math",
+      "source": "float(\\pi)",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 39,
+      "kind": "Code",
+      "mode": "Maxima",
+      "source": "fpprec: 30$ bfloat(%pi);",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 40,
+      "kind": "Text",
+      "mode": "Maxima",
+      "source": "Help: put the cursor on a function name (or right-click it) and the Help tab shows the Maxima manual entry. The Functions tab and the Maxima menu list functions by category, with dialogs that fill in the arguments for you.",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 41,
+      "kind": "Section",
+      "mode": "Maxima",
+      "source": "More",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 42,
+      "kind": "Text",
+      "mode": "Maxima",
+      "source": "Symbols that are not on your keyboard are in the Symbols tab and the Symbols menu. Ctrl+M switches to minimal (calculator) mode, and maximus --mcp runs a Model Context Protocol server so agents can use the same engine. Plugins in ~/.config/maximus/plugins add menu entries, palettes and snippets.",
+      "outputs": [],
+      "collapsed": false
+    },
+    {
+      "id": 43,
+      "kind": "Code",
+      "mode": "Math",
+      "source": "",
+      "outputs": [],
+      "collapsed": false
+    }
+  ],
+  "next_id": 44
+}

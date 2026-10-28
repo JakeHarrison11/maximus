@@ -375,3 +375,35 @@ mod plot_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod demo_notebook_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn demo_notebook_evaluates_without_errors() {
+        if Command::new("maxima").arg("--version").output().is_err() {
+            return;
+        }
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/demo.maximus");
+        let nb = Notebook::from_json(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let mut s = Session::new(Box::new(NativeBackend::new(NativeConfig::default())));
+        s.notebook = nb;
+        s.evaluate_all();
+        let start = Instant::now();
+        while s.is_busy() {
+            s.tick();
+            assert!(start.elapsed() < Duration::from_secs(120), "demo notebook timed out");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        for c in &s.notebook.cells {
+            if c.kind == CellKind::Code && !c.is_empty() {
+                assert_eq!(c.state, CellState::Done, "cell {} `{}` failed: {:?}", c.id, c.source, c.outputs);
+            }
+        }
+        let results = |id: usize| s.notebook.cells[id].outputs.iter().filter_map(|o| if let OutputItem::Result { text, .. } = o { Some(text.clone()) } else { None }).collect::<Vec<_>>();
+        // The two spec-style integral cells give the same answer.
+        assert_eq!(results(4), results(5), "{:?} vs {:?}", results(4), results(5));
+    }
+}

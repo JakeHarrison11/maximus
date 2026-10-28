@@ -26,6 +26,8 @@ cargo run --release -p maximus-app -- --mcp
 cargo test --workspace
 ```
 
+A guided tour lives in [examples/demo.maximus](examples/demo.maximus): `cargo run --release -p maximus-app -- --run examples/demo.maximus`.
+
 Keyboard: `Enter` evaluates a textbook cell, `Shift+Enter` evaluates a Maxima/LaTeX-source cell, `Ctrl+Shift+Enter` evaluates everything, `Ctrl+.` interrupts, `Ctrl+S` / `Ctrl+O` save and open. In the editor, `/` makes a fraction, `^` a power, `_` a subscript, `sqrt(` a root.
 
 ## Layout
