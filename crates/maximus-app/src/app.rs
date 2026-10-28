@@ -504,7 +504,9 @@ impl MaximusApp {
         if now < self.resize_hold_until {
             return;
         }
-        if let Some(r) = ctx.input(|i| i.viewport().inner_rect) {
+        // Wayland never reports inner_rect, so fall back to the size of the viewport.
+        {
+            let r = ctx.input(|i| i.viewport().inner_rect).unwrap_or_else(|| ctx.viewport_rect());
             let size = [(r.width() * zoom).round(), (r.height() * zoom).round()];
             let slot = if self.settings.minimal { &mut self.settings.minimal_size } else { &mut self.settings.full_size };
             if (slot[0] - size[0]).abs() >= 1.0 || (slot[1] - size[1]).abs() >= 1.0 {
@@ -513,11 +515,11 @@ impl MaximusApp {
             }
         }
         if let Some(t) = self.size_dirty_since {
-            if now - t > 1.0 {
+            if now - t > 0.3 {
                 self.settings.save();
                 self.size_dirty_since = None;
             } else {
-                ctx.request_repaint_after(std::time::Duration::from_millis(500));
+                ctx.request_repaint_after(std::time::Duration::from_millis(150));
             }
         }
     }
