@@ -80,16 +80,16 @@ impl MaximusApp {
             CellAction::DeleteBack(id) => {
                 let Some(i) = self.session.notebook.index_of(id) else { return };
                 if self.session.notebook.cells.len() == 1 {
-                    // The only cell is replaced by a fresh empty one.
+                    // The only cell is replaced by a fresh empty one of the same input style.
                     let (mode, latex) = self.input_style_like(Some(id));
                     let kind = self.session.notebook.cells[0].kind;
                     self.session.notebook.remove(id);
                     self.cell_ui.remove(&id);
-                    let n = if kind == CellKind::Code { self.add_code_cell(None, None) } else { self.session.notebook.add_cell(kind, InputMode::Maxima) };
+                    let n = self.session.notebook.add_cell(kind, if kind == CellKind::Code { mode } else { InputMode::Maxima });
+                    self.ensure_cell_ui(n);
                     if let Some(cu) = self.cell_ui.get_mut(&n) {
                         cu.latex_view = latex;
                     }
-                    let _ = mode;
                     self.focus_cell = Some(n);
                     self.active_cell = Some(n);
                     return;
@@ -325,8 +325,7 @@ impl MaximusApp {
             CellKind::Section => "Section heading",
             _ => "Notes…",
         };
-        let empty_back = self.session.notebook.cells.len() > 1
-            && self.session.notebook.cells[idx].source.is_empty()
+        let empty_back = self.session.notebook.cells[idx].source.is_empty()
             && ui.memory(|m| m.has_focus(eid))
             && ui.input(|i| i.key_pressed(Key::Backspace));
         if empty_back {
@@ -359,8 +358,7 @@ impl MaximusApp {
             if ui.memory(|m| m.has_focus(eid)) {
                 submit = ui.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::Enter));
             }
-            let empty_back = self.session.notebook.cells.len() > 1
-                && self.session.notebook.cells[idx].source.is_empty()
+            let empty_back = self.session.notebook.cells[idx].source.is_empty()
                 && ui.memory(|m| m.has_focus(eid))
                 && ui.input(|i| i.key_pressed(Key::Backspace));
             if empty_back {
@@ -389,7 +387,7 @@ impl MaximusApp {
             }
             focused = out.focused;
             submit = out.submit;
-            if out.backspace_on_empty && self.session.notebook.cells.len() > 1 {
+            if out.backspace_on_empty {
                 actions.push(CellAction::DeleteBack(id));
             }
             word = out.help_word.clone();
