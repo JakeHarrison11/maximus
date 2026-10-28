@@ -6,7 +6,7 @@ use crate::settings::PlotBackend;
 use eframe::egui;
 use egui::{Color32, Key, Modifiers, RichText};
 use maximus_core::*;
-use maximus_math::{maxima_to_latex, tree_to_plain_maxima};
+use maximus_math::tree_to_plain_maxima;
 use maximus_render::editor_ui::{math_editor, EditorStyle};
 
 pub enum CellAction {
@@ -408,26 +408,21 @@ impl MaximusApp {
                     }
                     ui.separator();
                 }
-                // With a selection the copy actions apply to the selection only.
-                let (latex, row, has_sel) = self
-                    .cell_ui
-                    .get_mut(&id)
-                    .map(|c| match c.editor.selected_row() {
-                        Some(r) => (maximus_math::row_to_latex(&r), r, true),
-                        None => (c.editor.latex(), c.editor.row.clone(), false),
-                    })
-                    .unwrap_or_default();
-                let suffix = if has_sel { " (selection)" } else { "" };
-                if ui.button(format!("Copy as LaTeX{}", suffix)).clicked() {
-                    ui.ctx().copy_text(latex.clone());
-                    ui.close();
-                }
-                if ui.button(format!("Copy as Maxima{}", suffix)).clicked() {
-                    match tree_to_plain_maxima(&row, &self.session.parse_ctx()) {
-                        Ok(m) => ui.ctx().copy_text(m),
-                        Err(e) => self.messages.push(format!("Cannot convert: {}", e)),
+                // Copying is only offered for a selection.
+                let selected = self.cell_ui.get_mut(&id).and_then(|c| c.editor.selected_row());
+                if let Some(row) = selected {
+                    if ui.button("Copy as LaTeX").clicked() {
+                        ui.ctx().copy_text(maximus_math::row_to_latex(&row));
+                        ui.close();
                     }
-                    ui.close();
+                    if ui.button("Copy as Maxima").clicked() {
+                        match tree_to_plain_maxima(&row, &self.session.parse_ctx()) {
+                            Ok(m) => ui.ctx().copy_text(m),
+                            Err(e) => self.messages.push(format!("Cannot convert: {}", e)),
+                        }
+                        ui.close();
+                    }
+                    ui.separator();
                 }
                 let in_matrix = self.cell_ui.get_mut(&id).map_or(false, |c| c.editor.in_matrix());
                 if in_matrix {
@@ -519,11 +514,12 @@ impl MaximusApp {
                     // Typeset results can be selected and copied.
                     match self.selectable_math(ui, (cell, k), text, size, color) {
                         Some((resp, sel)) => {
-                            resp.context_menu(|ui| self.result_menu(ui, text, sel.clone()));
+                            if sel.is_some() || !self.help_words_in(text).is_empty() {
+                                resp.context_menu(|ui| self.result_menu(ui, text, sel.clone()));
+                            }
                         }
                         None => {
-                            let resp = ui.add(egui::Label::new(RichText::new(text).monospace()).sense(egui::Sense::click()));
-                            resp.context_menu(|ui| self.result_menu(ui, text, None));
+                            ui.add(egui::Label::new(RichText::new(text).monospace()));
                         }
                     }
                 });
@@ -532,7 +528,7 @@ impl MaximusApp {
     }
 
     /// A typeset result whose parts can be selected. Returns the widget response and the selection as LaTeX.
-    pub fn selectable_math(&mut self, ui: &mut egui::Ui, key: (u64, usize), text: &str, size: f32, color: Color32) -> Option<(egui::Response, Option<String>)> {
+    pub fn selectable_math(&mut self, ui: &mut egui::Ui, key: (u64, usize), text: &str, size: f32, color: Color32) -> Option<(egui::Response, Option<maximus_math::Row>)> {
         let tree = self.tree_for(text)?;
         let entry = self.out_views.entry(key).or_insert_with(|| (String::new(), maximus_render::editor::EditorState::default()));
         if entry.0 != text {
@@ -542,7 +538,7 @@ impl MaximusApp {
         let width = maximus_render::layout_tree(ui.ctx(), &entry.1.row, size, false).w + 8.0;
         let draw = |ui: &mut egui::Ui, st: &mut maximus_render::editor::EditorState| {
             let out = maximus_render::editor_ui::math_view(ui, id, st, size, color);
-            (out.response, st.selection_latex())
+            (out.response, st.selected_row())
         };
         Some(if width <= ui.available_width() {
             draw(ui, &mut entry.1)
@@ -551,39 +547,46 @@ impl MaximusApp {
         })
     }
 
-    pub fn result_menu(&mut self, ui: &mut egui::Ui, text: &str, selection: Option<String>) {
-        if let Some(sel) = selection {
-            if ui.button("Copy selection as LaTeX").clicked() {
-                ui.ctx().copy_text(sel);
-                ui.close();
-            }
-            ui.separator();
-        }
-        if ui.button("Copy as LaTeX").clicked() {
-            ui.ctx().copy_text(maxima_to_latex(text).unwrap_or_else(|_| text.to_string()));
-            ui.close();
-        }
-        if ui.button("Copy as Maxima").clicked() {
-            ui.ctx().copy_text(text.to_string());
-            ui.close();
-        }
-        if ui.button("Use as input").clicked() {
-            self.pending.push(Insert::Text(text.to_string()));
-            ui.close();
-        }
-        let mut seen = Vec::new();
+    /// Maxima functions mentioned in a result that have documentation.
+    pub fn help_words_in(&self, text: &str) -> Vec<String> {
+        let mut seen: Vec<String> = Vec::new();
         for w in text.split(|c: char| !(c.is_alphanumeric() || c == '_')) {
-            if w.len() > 1 && !seen.iter().any(|s: &String| s == w) && self.help.first(w).is_some() {
+            if w.len() > 1 && !seen.iter().any(|s| s == w) && self.help.first(w).is_some() {
                 seen.push(w.to_string());
             }
         }
-        if !seen.is_empty() {
-            ui.separator();
-            for w in seen.into_iter().take(6) {
-                if ui.button(format!("Help for “{}”", w)).clicked() {
-                    self.show_help(&w);
-                    ui.close();
+        seen.truncate(6);
+        seen
+    }
+
+    /// Context menu of a result: copy actions only exist for a selection.
+    pub fn result_menu(&mut self, ui: &mut egui::Ui, text: &str, selection: Option<maximus_math::Row>) {
+        let help = self.help_words_in(text);
+        if let Some(row) = selection {
+            let latex = maximus_math::row_to_latex(&row);
+            if ui.button("Copy as LaTeX").clicked() {
+                ui.ctx().copy_text(latex.clone());
+                ui.close();
+            }
+            if ui.button("Copy as Maxima").clicked() {
+                match tree_to_plain_maxima(&row, &self.session.parse_ctx()) {
+                    Ok(m) => ui.ctx().copy_text(m),
+                    Err(e) => self.messages.push(format!("Cannot convert: {}", e)),
                 }
+                ui.close();
+            }
+            if ui.button("Use as input").clicked() {
+                self.pending.push(Insert::Text(latex));
+                ui.close();
+            }
+            if !help.is_empty() {
+                ui.separator();
+            }
+        }
+        for w in help {
+            if ui.button(format!("Help for “{}”", w)).clicked() {
+                self.show_help(&w);
+                ui.close();
             }
         }
     }

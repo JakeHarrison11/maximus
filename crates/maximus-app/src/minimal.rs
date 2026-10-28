@@ -200,7 +200,9 @@ impl MaximusApp {
                                 // Results can be selected; right-click offers copy and "Use as input".
                                 match self.selectable_math(ui, (id, k), text, size * 1.15, color) {
                                     Some((resp, sel)) => {
-                                        resp.context_menu(|ui| self.result_menu(ui, text, sel.clone()));
+                                        if sel.is_some() || !self.help_words_in(text).is_empty() {
+                                            resp.context_menu(|ui| self.result_menu(ui, text, sel.clone()));
+                                        }
                                     }
                                     None => {
                                         ui.label(RichText::new(text).monospace().size(size * 0.8));

@@ -34,6 +34,22 @@ pub struct VarEdit {
     pub fresh: bool,
 }
 
+/// A widget that can hold a selection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SelKey {
+    Cell(u64),
+    Output(u64, usize),
+    Minimal,
+    VarEdit,
+    NewVarName,
+    NewVarValue,
+}
+
+/// Of several widgets holding a selection, the one to keep: the newest, meaning one that was not the owner before.
+pub fn selection_to_keep(with: &[SelKey], owner: Option<SelKey>) -> SelKey {
+    with.iter().copied().find(|k| Some(*k) != owner).unwrap_or(with[0])
+}
+
 pub struct CellUi {
     pub editor: EditorState,
     pub latex_view: bool,
@@ -111,6 +127,7 @@ pub struct MaximusApp {
     pub scroll_to_cell: Option<u64>,
     pub manual_cats: Vec<(String, Vec<(String, Option<String>)>)>,
     pub run_on_start: bool,
+    pub sel_owner: Option<SelKey>,
     /// Selection state of typeset results, by (cell, output index).
     pub out_views: HashMap<(u64, usize), (String, EditorState)>,
     pub show_keypad: bool,
@@ -178,6 +195,7 @@ impl MaximusApp {
             scroll_to_cell: None,
             manual_cats: Vec::new(),
             run_on_start: opts.run_all,
+            sel_owner: None,
             out_views: HashMap::new(),
             show_keypad: true,
             matrix_dialog: None,
@@ -499,6 +517,62 @@ impl MaximusApp {
             } else {
                 ctx.request_repaint_after(std::time::Duration::from_millis(500));
             }
+        }
+    }
+
+    /// Only one thing can be selected at a time: when a new selection appears somewhere, the others are cleared.
+    fn enforce_single_selection(&mut self) {
+        let mut with: Vec<SelKey> = Vec::new();
+        for (id, cu) in self.cell_ui.iter_mut() {
+            if cu.editor.has_selection() {
+                with.push(SelKey::Cell(*id));
+            }
+        }
+        for (k, (_, st)) in self.out_views.iter_mut() {
+            if st.has_selection() {
+                with.push(SelKey::Output(k.0, k.1));
+            }
+        }
+        if self.min_editor.has_selection() {
+            with.push(SelKey::Minimal);
+        }
+        if self.var_edit.as_mut().map_or(false, |e| e.editor.has_selection()) {
+            with.push(SelKey::VarEdit);
+        }
+        if self.new_var_name.has_selection() {
+            with.push(SelKey::NewVarName);
+        }
+        if self.new_var_value.has_selection() {
+            with.push(SelKey::NewVarValue);
+        }
+        if with.len() > 1 {
+            // Keep the one that is new; if several are, the first of those.
+            let keep = selection_to_keep(&with, self.sel_owner);
+            for k in with.iter().filter(|k| **k != keep) {
+                match *k {
+                    SelKey::Cell(id) => {
+                        if let Some(cu) = self.cell_ui.get_mut(&id) {
+                            cu.editor.clear_selection();
+                        }
+                    }
+                    SelKey::Output(c, i) => {
+                        if let Some((_, st)) = self.out_views.get_mut(&(c, i)) {
+                            st.clear_selection();
+                        }
+                    }
+                    SelKey::Minimal => self.min_editor.clear_selection(),
+                    SelKey::VarEdit => {
+                        if let Some(e) = self.var_edit.as_mut() {
+                            e.editor.clear_selection();
+                        }
+                    }
+                    SelKey::NewVarName => self.new_var_name.clear_selection(),
+                    SelKey::NewVarValue => self.new_var_value.clear_selection(),
+                }
+            }
+            self.sel_owner = Some(keep);
+        } else {
+            self.sel_owner = with.first().copied();
         }
     }
 
@@ -1171,6 +1245,7 @@ impl eframe::App for MaximusApp {
             }
         }
         self.windows(&ctx);
+        self.enforce_single_selection();
     }
 }
 
@@ -1268,5 +1343,18 @@ fn template_text(t: Template, latex: bool) -> String {
             format!("\\begin{{pmatrix}}{}\\end{{pmatrix}}", vec![row; r].join("\\\\ "))
         }
         (Template::Matrix(r, c), false) => format!("matrix({})", vec![format!("[{}]", vec!["0"; c].join(",")); r].join(",")),
+    }
+}
+
+#[cfg(test)]
+mod selection_owner_tests {
+    use super::*;
+
+    #[test]
+    fn newest_selection_wins() {
+        let (a, b) = (SelKey::Cell(1), SelKey::Output(1, 0));
+        assert_eq!(selection_to_keep(&[a, b], Some(a)), b);
+        assert_eq!(selection_to_keep(&[a, b], Some(b)), a);
+        assert_eq!(selection_to_keep(&[a, b], None), a);
     }
 }
