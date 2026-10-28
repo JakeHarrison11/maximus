@@ -53,6 +53,8 @@ pub struct Session {
     next_req: RequestId,
     next_raw: u64,
     raw_collect: RawResult,
+    /// Outputs of the cell being evaluated; they replace the old ones only once evaluation ends.
+    cell_collect: Vec<OutputItem>,
     raw_done: HashMap<u64, RawResult>,
 }
 
@@ -69,6 +71,7 @@ impl Session {
             next_req: 1,
             next_raw: 1,
             raw_collect: RawResult::default(),
+            cell_collect: Vec::new(),
             raw_done: HashMap::new(),
         };
         s.sync_status();
@@ -203,8 +206,10 @@ impl Session {
     fn fail_job(&mut self, job: Job, msg: &str) {
         match job.kind {
             JobKind::Cell(id) => {
+                let mut outs = std::mem::take(&mut self.cell_collect);
+                outs.push(OutputItem::Error(msg.to_string()));
                 if let Some(c) = self.notebook.cell_mut(id) {
-                    c.outputs.push(OutputItem::Error(msg.to_string()));
+                    c.outputs = outs;
                     c.state = CellState::Failed;
                 }
             }
@@ -237,9 +242,10 @@ impl Session {
             JobKind::Cell(id) => {
                 let ctx = self.parse_ctx();
                 let Some(cell) = self.notebook.cell_mut(*id) else { return };
-                cell.outputs.clear();
+                self.cell_collect.clear();
                 match cell.to_maxima(&ctx) {
                     Ok(src) if src.trim().is_empty() => {
+                        cell.outputs.clear();
                         cell.state = CellState::Done;
                         return;
                     }
@@ -248,7 +254,7 @@ impl Session {
                         RequestKind::Eval(src)
                     }
                     Err(e) => {
-                        cell.outputs.push(OutputItem::Error(format!("Input error: {}", e)));
+                        cell.outputs = vec![OutputItem::Error(format!("Input error: {}", e))];
                         cell.state = CellState::Failed;
                         self.cancel_queued_cells();
                         return;
@@ -312,11 +318,7 @@ impl Session {
         };
         if let Some(item) = item {
             match &job.kind {
-                JobKind::Cell(id) => {
-                    if let Some(c) = self.notebook.cell_mut(*id) {
-                        c.outputs.push(item);
-                    }
-                }
+                JobKind::Cell(_) => self.cell_collect.push(item),
                 JobKind::Raw(_) => self.raw_collect.items.push(item),
                 JobKind::Vars => {}
             }
@@ -327,7 +329,9 @@ impl Session {
         self.inflight = None;
         match job.kind {
             JobKind::Cell(id) => {
+                let outs = std::mem::take(&mut self.cell_collect);
                 if let Some(c) = self.notebook.cell_mut(id) {
+                    c.outputs = outs;
                     c.state = if ok { CellState::Done } else { CellState::Failed };
                 }
                 if !ok {
@@ -421,6 +425,35 @@ mod tests {
         }
         fn interrupt(&mut self) {}
         fn restart(&mut self) {}
+    }
+
+    #[test]
+    fn old_output_stays_until_reevaluation_finishes() {
+        let mut s = Session::new(Box::new(Echo { pending: vec![] }));
+        let a = s.notebook.cells[0].id;
+        s.notebook.cell_mut(a).unwrap().mode = InputMode::Maxima;
+        s.notebook.cell_mut(a).unwrap().source = "1+1".into();
+        s.evaluate_cell(a);
+        for _ in 0..10 {
+            s.tick();
+        }
+        assert_eq!(s.notebook.cell(a).unwrap().outputs.len(), 1);
+        s.notebook.cell_mut(a).unwrap().source = "2+2".into();
+        s.evaluate_cell(a);
+        // Dispatched but the Echo backend has not been polled yet: the old output must still be there.
+        s.tick();
+        assert_eq!(s.notebook.cell(a).unwrap().state, CellState::Running);
+        match &s.notebook.cell(a).unwrap().outputs[0] {
+            OutputItem::Result { text, .. } => assert_eq!(text, "1+1;"),
+            o => panic!("{:?}", o),
+        }
+        for _ in 0..10 {
+            s.tick();
+        }
+        match &s.notebook.cell(a).unwrap().outputs[0] {
+            OutputItem::Result { text, .. } => assert_eq!(text, "2+2;"),
+            o => panic!("{:?}", o),
+        }
     }
 
     #[test]

@@ -93,6 +93,7 @@ pub struct MaximusApp {
     pub manual_cats: Vec<(String, Vec<(String, Option<String>)>)>,
     pub run_on_start: bool,
     pub show_keypad: bool,
+    pub matrix_dialog: Option<(usize, usize)>,
     pub last_mode: bool,
     pub resize_hold_until: f64,
     pub size_dirty_since: Option<f64>,
@@ -110,10 +111,8 @@ impl MaximusApp {
         if let Some(p) = &opts.maxima_path {
             settings.maxima_path = p.clone();
         }
-        cc.egui_ctx.set_visuals(if settings.dark { egui::Visuals::dark() } else { egui::Visuals::light() });
-        let mut style = (*cc.egui_ctx.global_style()).clone();
-        style.spacing.item_spacing = egui::vec2(6.0, 6.0);
-        cc.egui_ctx.set_global_style(style);
+        cc.egui_ctx.set_theme(if settings.dark { egui::ThemePreference::Dark } else { egui::ThemePreference::Light });
+        cc.egui_ctx.all_styles_mut(|style| style.spacing.item_spacing = egui::vec2(6.0, 6.0));
 
         let help = HelpIndex::load_system();
         maximus_math::words::register_functions(help.entries.iter().filter(|e| e.is_function()).map(|e| e.name.clone()));
@@ -155,6 +154,7 @@ impl MaximusApp {
             manual_cats: Vec::new(),
             run_on_start: opts.run_all,
             show_keypad: true,
+            matrix_dialog: None,
             last_mode,
             resize_hold_until: 0.0,
             size_dirty_since: None,
@@ -282,8 +282,35 @@ impl MaximusApp {
         t
     }
 
+    /// Input style (mode, LaTeX-source view) of the given cell, or of the last code cell.
+    pub fn input_style_like(&self, like: Option<u64>) -> (InputMode, bool) {
+        let cell = like
+            .and_then(|id| self.session.notebook.cell(id).filter(|c| c.kind == CellKind::Code))
+            .or_else(|| self.session.notebook.cells.iter().rev().find(|c| c.kind == CellKind::Code));
+        match cell {
+            Some(c) => (c.mode, self.cell_ui.get(&c.id).map_or(false, |u| u.latex_view)),
+            None => (InputMode::Math, false),
+        }
+    }
+
+    /// Creates an empty code cell (at `at`, default at the end) that uses the same kind of input as `like`
+    /// (default: the last code cell).
+    pub fn add_code_cell(&mut self, at: Option<usize>, like: Option<u64>) -> u64 {
+        let (mode, latex_view) = self.input_style_like(like);
+        let nb = &mut self.session.notebook;
+        let id = match at {
+            Some(i) => nb.insert_cell(i, CellKind::Code, mode),
+            None => nb.add_cell(CellKind::Code, mode),
+        };
+        self.ensure_cell_ui(id);
+        if let Some(cu) = self.cell_ui.get_mut(&id) {
+            cu.latex_view = latex_view;
+        }
+        id
+    }
+
     pub fn new_code_cell_at_end(&mut self) -> u64 {
-        let id = self.session.notebook.add_cell(CellKind::Code, InputMode::Math);
+        let id = self.add_code_cell(None, None);
         self.active_cell = Some(id);
         self.focus_cell = Some(id);
         self.scroll_to_cell = Some(id);
@@ -352,7 +379,7 @@ impl MaximusApp {
     pub fn run_cell(&mut self, id: u64) {
         self.session.evaluate_cell(id);
         if self.session.notebook.cells.last().map(|c| c.id) == Some(id) {
-            let new = self.session.notebook.add_cell(CellKind::Code, InputMode::Math);
+            let new = self.add_code_cell(None, Some(id));
             self.focus_cell = Some(new);
             self.active_cell = Some(new);
             self.scroll_to_cell = Some(new);
@@ -385,7 +412,7 @@ impl MaximusApp {
     }
 
     fn apply_theme(&self, ctx: &egui::Context) {
-        ctx.set_visuals(if self.settings.dark { egui::Visuals::dark() } else { egui::Visuals::light() });
+        ctx.set_theme(if self.settings.dark { egui::ThemePreference::Dark } else { egui::ThemePreference::Light });
     }
 
     fn poll_session(&mut self, ctx: &egui::Context) {
@@ -546,8 +573,7 @@ impl MaximusApp {
             ui.menu_button("Cell", |ui| {
                 for (label, kind) in [("Code cell", CellKind::Code), ("Text cell", CellKind::Text), ("Section", CellKind::Section), ("Title", CellKind::Title)] {
                     if ui.button(format!("Add {}", label.to_lowercase())).clicked() {
-                        let mode = if kind == CellKind::Code { InputMode::Math } else { InputMode::Maxima };
-                        let id = self.session.notebook.add_cell(kind, mode);
+                        let id = if kind == CellKind::Code { self.add_code_cell(None, None) } else { self.session.notebook.add_cell(kind, InputMode::Maxima) };
                         self.active_cell = Some(id);
                         self.focus_cell = Some(id);
                         self.scroll_to_cell = Some(id);
@@ -574,17 +600,6 @@ impl MaximusApp {
                 }
                 ui.checkbox(&mut self.settings.side_panel, "Side panel");
                 if ui.checkbox(&mut self.settings.contextual_help, "Contextual help follows cursor").clicked() {
-                    self.settings.save();
-                }
-                ui.separator();
-                if ui.button("Dark theme").clicked() {
-                    self.settings.dark = true;
-                    self.apply_theme(ui.ctx());
-                    self.settings.save();
-                }
-                if ui.button("Light theme").clicked() {
-                    self.settings.dark = false;
-                    self.apply_theme(ui.ctx());
                     self.settings.save();
                 }
             });
@@ -695,14 +710,10 @@ impl MaximusApp {
             if icons::icon_label_button(ui, Icon::Play, "Evaluate all", true).clicked() {
                 self.session.evaluate_all();
             }
-            if icons::icon_label_button(ui, Icon::Stop, "Stop", self.session.is_busy()).clicked() {
-                self.session.interrupt();
-            }
             ui.separator();
-            for (label, kind) in [("+ Code", CellKind::Code), ("+ Text", CellKind::Text), ("+ Section", CellKind::Section)] {
-                if ui.button(label).clicked() {
-                    let mode = if kind == CellKind::Code { InputMode::Math } else { InputMode::Maxima };
-                    let id = self.session.notebook.add_cell(kind, mode);
+            for (label, kind) in [("Code", CellKind::Code), ("Text", CellKind::Text), ("Section", CellKind::Section)] {
+                if icons::icon_label_button(ui, Icon::Plus, label, true).clicked() {
+                    let id = if kind == CellKind::Code { self.add_code_cell(None, None) } else { self.session.notebook.add_cell(kind, InputMode::Maxima) };
                     self.active_cell = Some(id);
                     self.focus_cell = Some(id);
                     self.scroll_to_cell = Some(id);
@@ -712,6 +723,14 @@ impl MaximusApp {
             if ui.button("Minimal mode").on_hover_text("Ctrl+M").clicked() {
                 self.settings.minimal = true;
                 self.settings.save();
+            }
+            if !self.settings.side_panel {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if icons::icon_button(ui, Icon::ChevronLeft, egui::vec2(24.0, 22.0), true).on_hover_text("Show sidebar").clicked() {
+                        self.settings.side_panel = true;
+                        self.settings.save();
+                    }
+                });
             }
         });
     }
@@ -753,10 +772,11 @@ impl MaximusApp {
     fn windows(&mut self, ctx: &egui::Context) {
         self.call_dialog_window(ctx);
         self.file_dialog_window(ctx);
+        self.matrix_dialog_window(ctx);
         self.settings_window(ctx);
         self.plugins_window(ctx);
         let mut about = self.about_open;
-        egui::Window::new("About Maximus").open(&mut about).collapsible(false).show(ctx, |ui| {
+        egui::Window::new("About Maximus").open(&mut about).collapsible(false).resizable(false).show(ctx, |ui| {
             ui.heading("Maximus");
             ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
             ui.label("A textbook-style notebook frontend for the Maxima computer algebra system.");
@@ -795,7 +815,7 @@ impl MaximusApp {
                 if ui.button("Insert").clicked() {
                     insert = Some(false);
                 }
-                if ui.button("Insert && evaluate").clicked() {
+                if ui.button("Insert and evaluate").clicked() {
                     insert = Some(true);
                 }
                 let name = d.template.function_name();
@@ -817,6 +837,38 @@ impl MaximusApp {
         }
     }
 
+    fn matrix_dialog_window(&mut self, ctx: &egui::Context) {
+        let Some((mut rows, mut cols)) = self.matrix_dialog else { return };
+        let mut done = None;
+        egui::Window::new("Insert matrix").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+            egui::Grid::new("matrix-size").num_columns(2).show(ui, |ui| {
+                ui.label("Rows");
+                ui.add(egui::DragValue::new(&mut rows).range(1..=30));
+                ui.end_row();
+                ui.label("Columns");
+                ui.add(egui::DragValue::new(&mut cols).range(1..=30));
+                ui.end_row();
+            });
+            ui.label(RichText::new("Tab moves between cells; right-click inside a matrix to add or remove rows and columns.").small().weak());
+            ui.horizontal(|ui| {
+                if ui.button("Insert").clicked() {
+                    done = Some(true);
+                }
+                if ui.button("Cancel").clicked() {
+                    done = Some(false);
+                }
+            });
+        });
+        match done {
+            Some(true) => {
+                self.pending.push(Insert::Template(Template::Matrix(rows, cols)));
+                self.matrix_dialog = None;
+            }
+            Some(false) => self.matrix_dialog = None,
+            None => self.matrix_dialog = Some((rows, cols)),
+        }
+    }
+
     fn file_dialog_window(&mut self, ctx: &egui::Context) {
         let Some(mut fd) = self.file_dialog.take() else { return };
         let mut keep = true;
@@ -827,7 +879,7 @@ impl MaximusApp {
             FileKind::ExportLatex => "Export LaTeX",
             FileKind::ExportMaxima => "Export Maxima script",
         };
-        egui::Window::new(title).collapsible(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+        egui::Window::new(title).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
             ui.label("Path");
             let r = ui.add(egui::TextEdit::singleline(&mut fd.path).desired_width(440.0));
             if r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
@@ -875,11 +927,16 @@ impl MaximusApp {
         let mut open = self.settings_open;
         let mut restart = false;
         let mut changed = false;
-        egui::Window::new("Settings").open(&mut open).collapsible(false).show(ctx, |ui| {
-            if ui.checkbox(&mut self.settings.dark, "Dark theme").changed() {
-                changed = true;
-                self.apply_theme(ctx);
-            }
+        egui::Window::new("Settings").open(&mut open).collapsible(false).resizable(false).show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Theme");
+                let mut theme_changed = ui.radio_value(&mut self.settings.dark, true, "Dark").changed();
+                theme_changed |= ui.radio_value(&mut self.settings.dark, false, "Light").changed();
+                if theme_changed {
+                    changed = true;
+                    self.apply_theme(ctx);
+                }
+            });
             changed |= ui.add(egui::Slider::new(&mut self.settings.math_size, 12.0..=40.0).text("Math size")).changed();
             changed |= ui.checkbox(&mut self.settings.contextual_help, "Contextual help follows the cursor").changed();
             ui.separator();
@@ -914,7 +971,7 @@ impl MaximusApp {
     fn plugins_window(&mut self, ctx: &egui::Context) {
         let mut open = self.plugins_open;
         let mut reload = false;
-        egui::Window::new("Plugins").open(&mut open).default_width(420.0).show(ctx, |ui| {
+        egui::Window::new("Plugins").open(&mut open).collapsible(false).resizable(false).show(ctx, |ui| {
             if self.plugins.is_empty() {
                 ui.label("No plugins found.");
                 if let Some(d) = settings::plugin_dir() {
@@ -965,6 +1022,10 @@ impl eframe::App for MaximusApp {
         let now = ctx.input(|i| i.time);
         self.autosave(now);
         for ins in std::mem::take(&mut self.pending) {
+            if matches!(ins, Insert::Template(Template::Matrix(0, 0))) {
+                self.matrix_dialog = Some((2, 2));
+                continue;
+            }
             if self.settings.minimal {
                 self.apply_insert_minimal(ins);
             } else {
@@ -979,18 +1040,33 @@ impl eframe::App for MaximusApp {
             }
         });
         egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
+        let mut splitter: Option<(egui::Rect, f32)> = None;
         if self.settings.minimal {
             egui::CentralPanel::default().show(ui, |ui| self.minimal_ui(ui));
         } else {
             if self.settings.side_panel {
-                let max_w = (ctx.content_rect().width() * 0.42).max(240.0);
-                egui::Panel::right("side")
-                    .resizable(true)
-                    .default_size(340.0_f32.min(max_w))
-                    .size_range(240.0_f32.min(max_w)..=max_w)
-                    .show(ui, |ui| self.side_panel(ui));
+                // The sidebar keeps a fixed share of the window; dragging its edge changes that share.
+                let win_w = ctx.content_rect().width();
+                let max_w = (win_w * 0.5).max(200.0);
+                let min_w = 280.0_f32.min(max_w);
+                let w = (self.settings.side_fraction * win_w).clamp(min_w, max_w);
+                let resp = egui::Panel::right("side").resizable(false).exact_size(w).show(ui, |ui| self.side_panel(ui));
+                let r = resp.response.rect;
+                splitter = Some((egui::Rect::from_min_max(egui::pos2(r.min.x - 3.0, r.min.y), egui::pos2(r.min.x + 3.0, r.max.y)), win_w));
             }
             egui::CentralPanel::default().show(ui, |ui| self.notebook_ui(ui));
+        }
+        if let Some((rect, win_w)) = splitter {
+            let h = ui.interact(rect, ui.make_persistent_id("side-splitter"), egui::Sense::drag());
+            if h.hovered() || h.dragged() {
+                ctx.set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+            }
+            if let (true, Some(p)) = (h.dragged(), h.interact_pointer_pos()) {
+                self.settings.side_fraction = ((win_w - p.x) / win_w).clamp(0.15, 0.5);
+            }
+            if h.drag_stopped() {
+                self.settings.save();
+            }
         }
         self.windows(&ctx);
     }
@@ -1038,8 +1114,7 @@ pub fn structure_buttons() -> Vec<(&'static str, Template)> {
         ("Π  Product", Template::Product),
         ("lim  Limit", Template::Limit),
         ("d/dx  Derivative", Template::Derivative),
-        ("2×2 Matrix", Template::Matrix(2, 2)),
-        ("3×3 Matrix", Template::Matrix(3, 3)),
+        ("[ ]  Matrix…", Template::Matrix(0, 0)),
     ]
 }
 

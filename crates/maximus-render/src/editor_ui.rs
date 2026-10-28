@@ -63,10 +63,11 @@ pub fn math_editor(ui: &mut egui::Ui, id: Id, state: &mut EditorState, style: &E
     }
     let focused = ctx.memory(|m| m.has_focus(rect_id));
     if focused {
+        let in_matrix = state.in_matrix();
         ctx.memory_mut(|m| {
             m.set_focus_lock_filter(
                 rect_id,
-                EventFilter { tab: false, horizontal_arrows: true, vertical_arrows: true, escape: false },
+                EventFilter { tab: in_matrix, horizontal_arrows: true, vertical_arrows: true, escape: false },
             )
         });
         let events = ui.input(|i| i.events.clone());
@@ -92,6 +93,7 @@ pub fn math_editor(ui: &mut egui::Ui, id: Id, state: &mut EditorState, style: &E
                         state.backspace()
                     }
                     Key::Delete => state.delete_forward(),
+                    Key::Tab if in_matrix => state.matrix_tab(modifiers.shift),
                     Key::ArrowLeft => {
                         state.move_horizontal(&b.marks, -1);
                         mutated = false;

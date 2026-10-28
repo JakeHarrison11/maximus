@@ -7,12 +7,14 @@ use egui::{Color32, Pos2, Rect, Response, Sense, Shape, Stroke, StrokeKind, Ui, 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Icon {
     Play,
-    Stop,
     Dots,
     Close,
     Check,
     Cross,
     Backspace,
+    Plus,
+    ChevronRight,
+    ChevronLeft,
 }
 
 pub fn draw_icon(ui: &Ui, icon: Icon, center: Pos2, size: f32, color: Color32) {
@@ -27,10 +29,6 @@ pub fn draw_icon(ui: &Ui, icon: Icon, center: Pos2, size: f32, color: Color32) {
                 Pos2::new(center.x + 0.85 * s, center.y),
             ];
             p.add(Shape::convex_polygon(pts, color, Stroke::NONE));
-        }
-        Icon::Stop => {
-            let r = Rect::from_center_size(center, Vec2::splat(1.4 * s));
-            p.rect_filled(r, 1.5, color);
         }
         Icon::Dots => {
             for dy in [-0.8, 0.0, 0.8] {
@@ -47,6 +45,20 @@ pub fn draw_icon(ui: &Ui, icon: Icon, center: Pos2, size: f32, color: Color32) {
                 Pos2::new(center.x - 0.8 * s, center.y + 0.05 * s),
                 Pos2::new(center.x - 0.25 * s, center.y + 0.6 * s),
                 Pos2::new(center.x + 0.85 * s, center.y - 0.6 * s),
+            ];
+            p.add(Shape::line(pts, stroke));
+        }
+        Icon::Plus => {
+            let d = 0.75 * s;
+            p.line_segment([Pos2::new(center.x - d, center.y), Pos2::new(center.x + d, center.y)], stroke);
+            p.line_segment([Pos2::new(center.x, center.y - d), Pos2::new(center.x, center.y + d)], stroke);
+        }
+        Icon::ChevronRight | Icon::ChevronLeft => {
+            let dir = if icon == Icon::ChevronRight { 1.0 } else { -1.0 };
+            let pts = vec![
+                Pos2::new(center.x - dir * 0.35 * s, center.y - 0.8 * s),
+                Pos2::new(center.x + dir * 0.45 * s, center.y),
+                Pos2::new(center.x - dir * 0.35 * s, center.y + 0.8 * s),
             ];
             p.add(Shape::line(pts, stroke));
         }

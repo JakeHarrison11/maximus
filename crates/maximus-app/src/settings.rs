@@ -35,6 +35,8 @@ pub struct Settings {
     pub gnuplot_path: String,
     pub minimal: bool,
     pub side_panel: bool,
+    /// Share of the window width taken by the sidebar.
+    pub side_fraction: f32,
     pub contextual_help: bool,
     pub disabled_plugins: Vec<String>,
 }
@@ -52,6 +54,7 @@ impl Default for Settings {
             gnuplot_path: "gnuplot".into(),
             minimal: false,
             side_panel: true,
+            side_fraction: 0.3,
             contextual_help: true,
             disabled_plugins: Vec::new(),
         }

@@ -12,10 +12,17 @@ impl MaximusApp {
         // Never let content demand more width than the panel has.
         ui.set_max_width(ui.available_width());
         ui.set_clip_rect(ui.max_rect().intersect(ui.clip_rect()));
-        ui.horizontal_wrapped(|ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
             for (tab, label) in [(SideTab::Help, "Help"), (SideTab::Variables, "Variables"), (SideTab::Symbols, "Symbols"), (SideTab::Functions, "Functions")] {
                 ui.selectable_value(&mut self.tab, tab, label);
             }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if icons::icon_button(ui, Icon::ChevronRight, egui::vec2(22.0, 22.0), false).on_hover_text("Hide sidebar").clicked() {
+                    self.settings.side_panel = false;
+                    self.settings.save();
+                }
+            });
         });
         ui.separator();
         match self.tab {

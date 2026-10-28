@@ -10,7 +10,7 @@ pub mod words;
 pub use expr::{expr_to_tree, to_maxima, to_maxima_with, Expr, PrintOpts};
 pub use maxima_parse::{parse_maxima, split_statements};
 pub use semantic::{parse_tree, ParseCtx, Stmt};
-pub use tree::{closer_of, NC_MARK, from_latex, row_from_str, row_to_latex, BigOp, Item, Row};
+pub use tree::{closer_of, tidy_parens, NC_MARK, from_latex, row_from_str, row_to_latex, BigOp, Item, Row};
 
 /// Converts a textbook tree to a Maxima script (statements terminated with `;` or `$`).
 pub fn tree_to_maxima(row: &[Item], ctx: &ParseCtx) -> Result<String, String> {
@@ -40,7 +40,7 @@ pub fn maxima_script_to_tree(src: &str) -> Result<Row, String> {
         out.extend(maxima_to_tree(&stmt).map_err(|e| format!("{} (in `{}`)", e, stmt))?);
         out.push(Item::Char(term));
     }
-    Ok(out)
+    Ok(tidy_parens(out))
 }
 
 /// Converts a Maxima script to LaTeX.
@@ -178,5 +178,38 @@ mod demo_tests {
         let src = "matrix([1,2],[3,4])^^-1; a:5$ f(x):=x^2+a$ b:[1,2,3]$ g:sqrt(2)/3$";
         let t = maxima_script_to_tree(src);
         assert!(t.is_ok(), "{:?}", t);
+    }
+}
+
+#[cfg(test)]
+mod tidy_tests {
+    use super::*;
+
+    fn tidy(latex: &str) -> String {
+        row_to_latex(&tidy_parens(from_latex(latex)))
+    }
+
+    #[test]
+    fn removes_only_unneeded_brackets() {
+        assert_eq!(tidy("(x+1)"), "x+1");
+        assert_eq!(tidy("((x+1))"), "x+1");
+        assert_eq!(tidy("a+(b)"), "a+b");
+        assert_eq!(tidy("(x)^2"), "x^{2}");
+        assert_eq!(tidy(r"\frac{(a+b)}{c}"), r"\frac{a+b}{c}");
+        assert_eq!(tidy("(a+b)(c+d)"), r"\left( a+b \right)\left( c+d \right)");
+        // Function arguments and needed grouping stay.
+        assert_eq!(tidy(r"\sin(x)"), r"\sin \left( x \right)");
+        assert_eq!(tidy("f(x)"), r"f\left( x \right)");
+        assert_eq!(tidy("(a+b)^2"), r"\left( a+b \right)^{2}");
+        assert_eq!(tidy("(x+1);(y+2)"), "x+1;y+2");
+    }
+
+    #[test]
+    fn unmatched_brackets_survive_a_latex_round_trip() {
+        let r = from_latex("x+1)");
+        assert_eq!(row_to_latex(&r), "x+1)");
+        let r = from_latex("(x+1");
+        assert_eq!(r.first(), Some(&Item::Char('(')));
+        assert!(latex_to_maxima("(x+1", &ParseCtx::default()).unwrap_err().contains("unbalanced"));
     }
 }

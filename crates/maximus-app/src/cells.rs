@@ -21,8 +21,14 @@ pub enum CellAction {
     InsertBelow(u64, CellKind),
     ToggleCollapse(u64),
     ClearOutput(u64),
-    SetMode(u64, InputMode),
-    ToggleLatex(u64),
+    SetInput(u64, InputKind),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum InputKind {
+    Textbook,
+    Maxima,
+    Latex,
 }
 
 const RED: Color32 = Color32::from_rgb(0xe5, 0x39, 0x35);
@@ -38,10 +44,10 @@ impl MaximusApp {
             }
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if ui.button("+ Code cell").clicked() {
+                if icons::icon_label_button(ui, Icon::Plus, "Code cell", true).clicked() {
                     self.new_code_cell_at_end();
                 }
-                if ui.button("+ Text cell").clicked() {
+                if icons::icon_label_button(ui, Icon::Plus, "Text cell", true).clicked() {
                     let id = self.session.notebook.add_cell(CellKind::Text, InputMode::Maxima);
                     self.focus_cell = Some(id);
                 }
@@ -54,98 +60,127 @@ impl MaximusApp {
     }
 
     fn apply_action(&mut self, a: CellAction) {
-        let nb = &mut self.session.notebook;
         match a {
             CellAction::Run(id) => self.run_cell(id),
             CellAction::RunThrough(id) => self.session.evaluate_through(id),
             CellAction::Delete(id) => {
+                let (mode, latex) = self.input_style_like(Some(id));
+                let nb = &mut self.session.notebook;
                 nb.remove(id);
                 self.cell_ui.remove(&id);
                 if nb.cells.is_empty() {
-                    let n = nb.add_cell(CellKind::Code, InputMode::Math);
+                    let n = nb.add_cell(CellKind::Code, mode);
+                    self.ensure_cell_ui(n);
+                    if let Some(cu) = self.cell_ui.get_mut(&n) {
+                        cu.latex_view = latex;
+                    }
                     self.focus_cell = Some(n);
                 }
             }
             CellAction::DeleteBack(id) => {
-                let Some(i) = nb.index_of(id) else { return };
-                if nb.cells.len() > 1 {
-                    nb.remove(id);
+                let Some(i) = self.session.notebook.index_of(id) else { return };
+                if self.session.notebook.cells.len() == 1 {
+                    // The only cell is replaced by a fresh empty one.
+                    let (mode, latex) = self.input_style_like(Some(id));
+                    let kind = self.session.notebook.cells[0].kind;
+                    self.session.notebook.remove(id);
                     self.cell_ui.remove(&id);
-                    let target = nb.cells[i.saturating_sub(1).min(nb.cells.len() - 1)].id;
-                    self.focus_cell = Some(target);
-                    self.active_cell = Some(target);
-                    if let Some(cu) = self.cell_ui.get_mut(&target) {
-                        cu.editor.cur = maximus_render::editor::Cursor { path: vec![], pos: cu.editor.row.len() };
+                    let n = if kind == CellKind::Code { self.add_code_cell(None, None) } else { self.session.notebook.add_cell(kind, InputMode::Maxima) };
+                    if let Some(cu) = self.cell_ui.get_mut(&n) {
+                        cu.latex_view = latex;
                     }
+                    let _ = mode;
+                    self.focus_cell = Some(n);
+                    self.active_cell = Some(n);
+                    return;
+                }
+                let nb = &mut self.session.notebook;
+                nb.remove(id);
+                self.cell_ui.remove(&id);
+                let target = nb.cells[i.saturating_sub(1).min(nb.cells.len() - 1)].id;
+                self.focus_cell = Some(target);
+                self.active_cell = Some(target);
+                if let Some(cu) = self.cell_ui.get_mut(&target) {
+                    cu.editor.cur = maximus_render::editor::Cursor { path: vec![], pos: cu.editor.row.len() };
                 }
             }
-            CellAction::Up(id) => nb.move_up(id),
-            CellAction::Down(id) => nb.move_down(id),
+            CellAction::Up(id) => self.session.notebook.move_up(id),
+            CellAction::Down(id) => self.session.notebook.move_down(id),
             CellAction::Duplicate(id) => {
-                if let Some(n) = nb.duplicate(id) {
+                if let Some(n) = self.session.notebook.duplicate(id) {
                     self.focus_cell = Some(n);
                 }
             }
             CellAction::InsertBelow(id, kind) => {
-                let at = nb.index_of(id).map_or(nb.cells.len(), |i| i + 1);
-                let mode = if kind == CellKind::Code { InputMode::Math } else { InputMode::Maxima };
-                let n = nb.insert_cell(at, kind, mode);
+                let at = self.session.notebook.index_of(id).map_or(self.session.notebook.cells.len(), |i| i + 1);
+                let n = if kind == CellKind::Code { self.add_code_cell(Some(at), Some(id)) } else { self.session.notebook.insert_cell(at, kind, InputMode::Maxima) };
                 self.focus_cell = Some(n);
                 self.active_cell = Some(n);
             }
             CellAction::ToggleCollapse(id) => {
-                if let Some(c) = nb.cell_mut(id) {
+                if let Some(c) = self.session.notebook.cell_mut(id) {
                     c.collapsed = !c.collapsed;
                 }
             }
             CellAction::ClearOutput(id) => {
-                if let Some(c) = nb.cell_mut(id) {
+                if let Some(c) = self.session.notebook.cell_mut(id) {
                     c.outputs.clear();
                     c.state = CellState::Idle;
                 }
             }
-            CellAction::SetMode(id, mode) => self.set_cell_mode(id, mode),
-            CellAction::ToggleLatex(id) => {
-                let src = self.session.notebook.cell(id).map(|c| c.source.clone()).unwrap_or_default();
-                if let Some(cu) = self.cell_ui.get_mut(&id) {
-                    if cu.latex_view {
-                        cu.editor = maximus_render::editor::EditorState::from_latex(&src);
-                    }
-                    cu.latex_view = !cu.latex_view;
-                }
-                self.focus_cell = Some(id);
-            }
+            CellAction::SetInput(id, kind) => self.set_cell_input(id, kind),
         }
     }
 
-    /// Switches a cell between textbook and Maxima input, converting the content.
-    fn set_cell_mode(&mut self, id: u64, mode: InputMode) {
-        let ctx = self.session.parse_ctx();
+    /// Switches a cell between textbook, Maxima and LaTeX-source input, converting the content.
+    fn set_cell_input(&mut self, id: u64, kind: InputKind) {
+        self.ensure_cell_ui(id);
         let Some(cell) = self.session.notebook.cell(id) else { return };
-        if cell.mode == mode {
+        let (cur_mode, cur_latex) = (cell.mode, self.cell_ui.get(&id).map_or(false, |c| c.latex_view));
+        let (want_mode, want_latex) = match kind {
+            InputKind::Textbook => (InputMode::Math, false),
+            InputKind::Latex => (InputMode::Math, true),
+            InputKind::Maxima => (InputMode::Maxima, false),
+        };
+        if cur_mode == want_mode && cur_latex == want_latex {
             return;
         }
-        let new_source = match mode {
-            InputMode::Maxima => match cell.to_maxima(&ctx) {
-                Ok(s) => s,
-                Err(e) => {
-                    self.messages.push(format!("Cannot convert to Maxima: {}", e));
-                    return;
+        let ctx = self.session.parse_ctx();
+        if cur_mode != want_mode {
+            let cell = self.session.notebook.cell(id).unwrap();
+            let new_source = if cell.source.trim().is_empty() {
+                String::new()
+            } else if want_mode == InputMode::Maxima {
+                match cell.to_maxima(&ctx) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        self.messages.push(format!("Cannot convert to Maxima: {}", e));
+                        return;
+                    }
                 }
-            },
-            InputMode::Math => match maximus_math::maxima_script_to_latex(&cell.source) {
-                Ok(l) => l,
-                Err(e) => {
-                    self.messages.push(format!("Cannot convert to textbook input: {}", e));
-                    return;
+            } else {
+                match maximus_math::maxima_script_to_latex(&cell.source) {
+                    Ok(l) => l,
+                    Err(e) => {
+                        self.messages.push(format!("Cannot convert to textbook input: {}", e));
+                        return;
+                    }
                 }
-            },
-        };
-        let c = self.session.notebook.cell_mut(id).unwrap();
-        c.source = new_source;
-        c.mode = mode;
-        self.cell_ui.remove(&id);
-        self.ensure_cell_ui(id);
+            };
+            let c = self.session.notebook.cell_mut(id).unwrap();
+            c.source = new_source;
+            c.mode = want_mode;
+        }
+        // Rebuild the textbook editor from the (possibly converted) source, dropping needless brackets.
+        let src = self.session.notebook.cell(id).unwrap().source.clone();
+        if let Some(cu) = self.cell_ui.get_mut(&id) {
+            if want_mode == InputMode::Math && !want_latex {
+                cu.editor = maximus_render::editor::EditorState::from_latex_tidy(&src);
+                let tidy = cu.editor.latex();
+                self.session.notebook.cell_mut(id).unwrap().source = tidy;
+            }
+            cu.latex_view = want_latex;
+        }
         self.focus_cell = Some(id);
     }
 
@@ -220,20 +255,16 @@ impl MaximusApp {
         egui::Popup::menu(&menu_btn).show(|ui| {
             if kind == CellKind::Code {
                 let mode = self.session.notebook.cells[idx].mode;
-                if ui.selectable_label(mode == InputMode::Math && !self.cell_ui.get(&id).map_or(false, |c| c.latex_view), "Textbook input").clicked() {
-                    if self.cell_ui.get(&id).map_or(false, |c| c.latex_view) {
-                        actions.push(CellAction::ToggleLatex(id));
+                let latex = self.cell_ui.get(&id).map_or(false, |c| c.latex_view);
+                for (label, k, on) in [
+                    ("Textbook input", InputKind::Textbook, mode == InputMode::Math && !latex),
+                    ("Maxima input", InputKind::Maxima, mode == InputMode::Maxima),
+                    ("LaTeX source", InputKind::Latex, mode == InputMode::Math && latex),
+                ] {
+                    if ui.selectable_label(on, label).clicked() {
+                        actions.push(CellAction::SetInput(id, k));
+                        ui.close();
                     }
-                    actions.push(CellAction::SetMode(id, InputMode::Math));
-                    ui.close();
-                }
-                if ui.selectable_label(mode == InputMode::Maxima, "Maxima input").clicked() {
-                    actions.push(CellAction::SetMode(id, InputMode::Maxima));
-                    ui.close();
-                }
-                if mode == InputMode::Math && ui.selectable_label(self.cell_ui.get(&id).map_or(false, |c| c.latex_view), "LaTeX source").clicked() {
-                    actions.push(CellAction::ToggleLatex(id));
-                    ui.close();
                 }
                 ui.separator();
                 if ui.button("Evaluate to here").clicked() {
@@ -324,7 +355,7 @@ impl MaximusApp {
         let mut word: Option<String> = None;
 
         if latex_view || mode == InputMode::Maxima {
-            let hint = if latex_view { "LaTeX, e.g. \\int_0^{\\infty} x \\sin^3 x \\, dx" } else { "Maxima code, e.g. integrate(x*sin(x), x);  (Shift+Enter evaluates)" };
+            let hint = if latex_view { "Type LaTeX here" } else { "Type Maxima code here" };
             if ui.memory(|m| m.has_focus(eid)) {
                 submit = ui.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::Enter));
             }
@@ -389,8 +420,32 @@ impl MaximusApp {
                     }
                     ui.close();
                 }
+                let in_matrix = self.cell_ui.get_mut(&id).map_or(false, |c| c.editor.in_matrix());
+                if in_matrix {
+                    ui.separator();
+                    type MatrixOp = fn(&mut maximus_render::editor::EditorState);
+                    let ops: [(&str, MatrixOp); 6] = [
+                        ("Add row below", |e| e.matrix_add_row(true)),
+                        ("Add row above", |e| e.matrix_add_row(false)),
+                        ("Add column right", |e| e.matrix_add_col(true)),
+                        ("Add column left", |e| e.matrix_add_col(false)),
+                        ("Remove row", |e| e.matrix_remove_row()),
+                        ("Remove column", |e| e.matrix_remove_col()),
+                    ];
+                    for (label, op) in ops {
+                        if ui.button(label).clicked() {
+                            if let Some(cu) = self.cell_ui.get_mut(&id) {
+                                op(&mut cu.editor);
+                                let latex = cu.editor.latex();
+                                self.session.notebook.cells[idx].source = latex;
+                            }
+                            ui.close();
+                        }
+                    }
+                    ui.separator();
+                }
                 if ui.button("Convert cell to Maxima input").clicked() {
-                    actions.push(CellAction::SetMode(id, InputMode::Maxima));
+                    actions.push(CellAction::SetInput(id, InputKind::Maxima));
                     ui.close();
                 }
                 if ui.button("Clear input").clicked() {

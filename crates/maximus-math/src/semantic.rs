@@ -128,6 +128,7 @@ fn tokenize(row: &[Item]) -> Result<Vec<S>, String> {
                     '\'' => {}
                     c if greek_name_of_glyph(c).is_some() => out.push(S::Sym(greek_name_of_glyph(c).unwrap().to_string())),
                     c if c.is_alphabetic() => out.push(S::Sym(c.to_string())),
+                    '(' | ')' | '[' | ']' | '{' | '}' => return Err(format!("unbalanced bracket '{}' — add the matching one or delete it", c)),
                     c => return Err(format!("unsupported symbol '{}'", c)),
                 }
             }

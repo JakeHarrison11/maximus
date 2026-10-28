@@ -101,6 +101,14 @@ impl EditorState {
         s
     }
 
+    /// Like [`Self::from_latex`] but drops brackets that do not change the meaning.
+    pub fn from_latex_tidy(src: &str) -> Self {
+        let mut s = Self::from_latex(src);
+        s.row = maximus_math::tidy_parens(std::mem::take(&mut s.row));
+        s.cur = Cursor { path: vec![], pos: s.row.len() };
+        s
+    }
+
     pub fn latex(&self) -> String {
         row_to_latex(&self.row)
     }
@@ -292,34 +300,60 @@ impl EditorState {
         false
     }
 
-    /// Replaces the group at `idx` in the row at `path` by its content; returns the content length.
-    fn unwrap_group(&mut self, path: &[(usize, usize)], idx: usize) -> usize {
-        let Some(row) = row_at(&mut self.row, path) else { return 0 };
-        let Item::Group(_, _, body) = row.remove(idx) else { return 0 };
+    /// Dissolves the bracket pair at `idx` in the row at `path`.
+    /// `keep` says which bracket survives as a plain character: `None` removes both (and is used for `|`),
+    /// `Some(true)` keeps the opening one, `Some(false)` keeps the closing one.
+    /// Returns the number of items that now stand where the group's content was, and the content offset.
+    fn dissolve_group(&mut self, path: &[(usize, usize)], idx: usize, keep: Option<bool>) -> (usize, usize) {
+        let Some(row) = row_at(&mut self.row, path) else { return (0, 0) };
+        let Item::Group(o, c, body) = row.remove(idx) else { return (0, 0) };
         let n = body.len();
-        row.splice(idx..idx, body);
-        n
+        let keep = if o == '|' || body.is_empty() { None } else { keep };
+        let mut items: Vec<Item> = Vec::new();
+        let mut offset = 0;
+        if keep == Some(true) {
+            items.push(Item::Char(o));
+            offset = 1;
+        }
+        items.extend(body);
+        if keep == Some(false) {
+            items.push(Item::Char(c));
+        }
+        row.splice(idx..idx, items);
+        (n, offset)
     }
 
     pub fn backspace(&mut self) {
         self.clamp();
         let pos = self.cur.pos;
         if pos == 0 {
-            // At the start of a slot: dissolve a bracket pair, remove an empty structure, or step out.
-            if let Some((i, _)) = self.cur.path.last().copied() {
-                let mut path = self.cur.path.clone();
-                path.pop();
-                let is_group = row_at(&mut self.row, &path).map_or(false, |r| matches!(r.get(i), Some(Item::Group(..))));
-                if is_group {
-                    self.unwrap_group(&path, i);
+            let Some((i, slot)) = self.cur.path.last().copied() else { return };
+            let mut path = self.cur.path.clone();
+            path.pop();
+            let kind = row_at(&mut self.row, &path).and_then(|r| r.get(i)).cloned();
+            match kind {
+                // Deleting the opening bracket leaves the closing one behind.
+                Some(Item::Group(..)) => {
+                    self.dissolve_group(&path, i, Some(false));
                     self.cur = Cursor { path, pos: i };
-                    return;
                 }
-                let empty = row_at(&mut self.row, &path).and_then(|r| r.get_mut(i)).map_or(false, item_all_empty);
-                if empty {
-                    row_at(&mut self.row, &path).unwrap().remove(i);
+                Some(mut item) => {
+                    let empty = item_all_empty(&mut item);
+                    let multi = matches!(item, Item::Frac(..) | Item::Big(..) | Item::Matrix(_));
+                    if empty {
+                        row_at(&mut self.row, &path).unwrap().remove(i);
+                        self.cur = Cursor { path, pos: i };
+                    } else if multi && slot > 0 {
+                        // Backspacing out of a denominator (or later cell) lands at the end of the slot before it.
+                        let mut p = path;
+                        p.push((i, slot - 1));
+                        let len = row_at(&mut self.row, &p).map_or(0, |r| r.len());
+                        self.cur = Cursor { path: p, pos: len };
+                    } else {
+                        self.cur = Cursor { path, pos: i };
+                    }
                 }
-                self.cur = Cursor { path, pos: i };
+                None => {}
             }
             return;
         }
@@ -331,8 +365,9 @@ impl EditorState {
                 self.cur.pos = pos - 1;
             }
             Item::Group(..) => {
-                let n = self.unwrap_group(&path, pos - 1);
-                self.cur.pos = pos - 1 + n;
+                // Deleting the closing bracket leaves the opening one behind.
+                let (n, off) = self.dissolve_group(&path, pos - 1, Some(true));
+                self.cur.pos = pos - 1 + off + n;
             }
             item => {
                 if item_all_empty(item) {
@@ -355,14 +390,14 @@ impl EditorState {
         let path = self.cur.path.clone();
         let r = self.cur_row();
         if pos >= r.len() {
-            // At the end of a bracket pair: dissolve it.
+            // At the end of a bracket pair: delete the closing bracket.
             if let Some((i, _)) = path.last().copied() {
                 let mut parent = path.clone();
                 parent.pop();
                 let is_group = row_at(&mut self.row, &parent).map_or(false, |r| matches!(r.get(i), Some(Item::Group(..))));
                 if is_group {
-                    let n = self.unwrap_group(&parent, i);
-                    self.cur = Cursor { path: parent, pos: i + n };
+                    let (n, off) = self.dissolve_group(&parent, i, Some(true));
+                    self.cur = Cursor { path: parent, pos: i + off + n };
                 }
             }
             return;
@@ -372,7 +407,8 @@ impl EditorState {
                 r.remove(pos);
             }
             Item::Group(..) => {
-                self.unwrap_group(&path, pos);
+                // Deleting the opening bracket leaves the closing one behind.
+                self.dissolve_group(&path, pos, Some(false));
             }
             item => {
                 if item_all_empty(item) {
@@ -407,10 +443,10 @@ impl EditorState {
         let looks_latex = t.contains('\\') || t.starts_with('$') || t.contains("^{") || t.contains("_{") || t.contains("\\(");
         if !looks_latex {
             if let Ok(e) = parse_maxima(t) {
-                return expr_to_tree(&e);
+                return maximus_math::tidy_parens(expr_to_tree(&e));
             }
         }
-        from_latex(t)
+        maximus_math::tidy_parens(from_latex(t))
     }
 
     pub fn paste(&mut self, text: &str) {
@@ -478,6 +514,109 @@ impl EditorState {
                 self.enter(pos, 0, 0);
             }
         }
+    }
+
+    // ------------------------------------------------------------ matrices
+
+    /// Path of the innermost matrix around the cursor and the (row, col) of the cell holding it.
+    fn matrix_context(&mut self) -> Option<(Vec<(usize, usize)>, usize, usize, usize)> {
+        for depth in (0..self.cur.path.len()).rev() {
+            let (i, slot) = self.cur.path[depth];
+            let parent: Vec<(usize, usize)> = self.cur.path[..depth].to_vec();
+            if let Some(Item::Matrix(m)) = row_at(&mut self.row, &parent).and_then(|r| r.get(i)) {
+                let ncols = m.iter().map(|r| r.len()).max().unwrap_or(1).max(1);
+                return Some((parent, i, slot / ncols, slot % ncols));
+            }
+        }
+        None
+    }
+
+    pub fn in_matrix(&mut self) -> bool {
+        self.matrix_context().is_some()
+    }
+
+    fn with_matrix<R>(&mut self, f: impl FnOnce(&mut Vec<Vec<Row>>, usize, usize) -> R) -> Option<R> {
+        let (parent, i, r, c) = self.matrix_context()?;
+        let Item::Matrix(m) = row_at(&mut self.row, &parent)?.get_mut(i)? else { return None };
+        Some(f(m, r, c))
+    }
+
+    /// Inserts a row after (`after`) or before the current one.
+    pub fn matrix_add_row(&mut self, after: bool) {
+        self.with_matrix(|m, r, _| {
+            let ncols = m.iter().map(|x| x.len()).max().unwrap_or(1).max(1);
+            m.insert(if after { r + 1 } else { r }, vec![vec![]; ncols]);
+        });
+    }
+
+    pub fn matrix_add_col(&mut self, after: bool) {
+        self.with_matrix(|m, _, c| {
+            for row in m.iter_mut() {
+                row.insert(if after { (c + 1).min(row.len()) } else { c.min(row.len()) }, vec![]);
+            }
+        });
+    }
+
+    pub fn matrix_remove_row(&mut self) {
+        if let Some((parent, i, r, _)) = self.matrix_context() {
+            let removed = self.with_matrix(|m, r, _| if m.len() > 1 { m.remove(r); true } else { false });
+            if removed == Some(true) {
+                let mut p = parent;
+                p.push((i, 0));
+                self.cur = Cursor { path: p, pos: 0 };
+                let _ = r;
+            }
+        }
+    }
+
+    pub fn matrix_remove_col(&mut self) {
+        if let Some((parent, i, _, _)) = self.matrix_context() {
+            let removed = self.with_matrix(|m, _, c| {
+                if m.iter().map(|x| x.len()).max().unwrap_or(0) > 1 {
+                    for row in m.iter_mut() {
+                        if c < row.len() {
+                            row.remove(c);
+                        }
+                    }
+                    true
+                } else {
+                    false
+                }
+            });
+            if removed == Some(true) {
+                let mut p = parent;
+                p.push((i, 0));
+                self.cur = Cursor { path: p, pos: 0 };
+            }
+        }
+    }
+
+    /// Tab: next matrix cell (row-major); at the very end a new row is appended. Shift+Tab goes back.
+    pub fn matrix_tab(&mut self, back: bool) {
+        let Some((parent, i, r, c)) = self.matrix_context() else { return };
+        let depth = parent.len();
+        let (rows, cols) = match row_at(&mut self.row, &parent).and_then(|x| x.get(i)) {
+            Some(Item::Matrix(m)) => (m.len(), m.iter().map(|x| x.len()).max().unwrap_or(1).max(1)),
+            _ => return,
+        };
+        let mut idx = r * cols + c;
+        let total = rows * cols;
+        if back {
+            if idx == 0 {
+                return;
+            }
+            idx -= 1;
+        } else {
+            idx += 1;
+            if idx >= total {
+                self.matrix_add_row(true);
+            }
+        }
+        let mut path = parent;
+        path.push((i, idx));
+        let _ = depth;
+        let len = row_at(&mut self.row, &path).map_or(0, |x| x.len());
+        self.cur = Cursor { path, pos: if back { len } else { 0 } };
     }
 
     // ------------------------------------------------------------ navigation
@@ -714,18 +853,63 @@ mod tests {
 
     #[test]
     fn deleting_brackets_with_content() {
+        // Backspace after `)` removes only the closing bracket.
         let mut e = typed("(ab)+c");
-        // Cursor after `c`; move to just after the group and backspace: the pair dissolves.
         e.cur = Cursor { path: vec![], pos: 1 };
         e.backspace();
-        assert_eq!(e.latex(), "ab+c");
+        assert_eq!(e.latex(), "(ab+c");
+        assert_eq!(e.cur, Cursor { path: vec![], pos: 3 });
+        // Backspace right after `(` removes only the opening bracket.
         let mut e = typed("(ab");
         e.cur = Cursor { path: vec![(0, 0)], pos: 0 };
         e.backspace();
-        assert_eq!(e.latex(), "ab");
+        assert_eq!(e.latex(), "ab)");
+        // Delete before `(` and at the end of a group do the same from the other side.
+        let mut e = typed("(ab)");
+        e.cur = Cursor { path: vec![], pos: 0 };
+        e.delete_forward();
+        assert_eq!(e.latex(), "ab)");
         let mut e = typed("(ab");
         e.delete_forward();
-        assert_eq!(e.latex(), "(ab)".replace("(", "").replace(")", ""));
+        assert_eq!(e.latex(), "(ab");
+        // An empty pair disappears completely, and bars always go together.
+        let mut e = typed("()");
+        e.cur = Cursor { path: vec![], pos: 1 };
+        e.backspace();
+        assert!(e.row.is_empty());
+        let mut e = typed("|ab|");
+        e.cur = Cursor { path: vec![], pos: 1 };
+        e.backspace();
+        assert_eq!(e.latex(), "ab");
+    }
+
+    #[test]
+    fn backspace_from_denominator_goes_to_numerator() {
+        let mut e = typed("a+1/b");
+        assert_eq!(e.cur.path, vec![(2, 1)]);
+        e.backspace(); // deletes b
+        e.backspace(); // empty denominator, non-empty numerator: move up
+        assert_eq!(e.cur, Cursor { path: vec![(2, 0)], pos: 1 });
+        assert_eq!(e.latex(), "a+\\frac{1}{}");
+    }
+
+    #[test]
+    fn matrices_of_any_size() {
+        let mut e = EditorState::default();
+        e.insert_template(Template::Matrix(2, 2));
+        assert!(e.in_matrix());
+        e.matrix_add_col(true);
+        e.matrix_add_row(true);
+        let Item::Matrix(m) = &e.row[0] else { panic!() };
+        assert_eq!((m.len(), m[0].len()), (3, 3));
+        e.type_text("1");
+        e.matrix_tab(false);
+        e.type_text("2");
+        assert_eq!(e.cur.path, vec![(0, 1)]);
+        e.matrix_remove_col();
+        e.matrix_remove_row();
+        let Item::Matrix(m) = &e.row[0] else { panic!() };
+        assert_eq!((m.len(), m[0].len()), (2, 2));
     }
 
     #[test]
