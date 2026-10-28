@@ -100,7 +100,7 @@ impl MaximusApp {
         ui.separator();
         let vars = self.session.variables.clone();
         if vars.is_empty() {
-            ui.label(RichText::new("No user-defined variables yet.\nTry  a: 5  or  f(x) := x^2").weak());
+            ui.label(RichText::new("No user defined variables yet.").weak());
         }
         let color = ui.visuals().text_color();
         // A little larger than the original 16, a little smaller than the math size.
@@ -135,11 +135,7 @@ impl MaximusApp {
                         let mut row: Vec<Item> = Vec::new();
                         let value_tree = self.tree_for(&v.value);
                         if !v.is_function {
-                            if v.name.chars().count() == 1 {
-                                row.extend(v.name.chars().map(Item::Char));
-                            } else {
-                                row.push(Item::Text(v.name.clone()));
-                            }
+                            row.extend(name_row(&v.name));
                             row.push(Item::Char('='));
                         }
                         match value_tree {
@@ -384,6 +380,25 @@ impl MaximusApp {
     }
 }
 
+/// A variable name as typeset math: `x` is an italic letter, `mass` stays literal text, and `V_1` gets a subscript.
+pub fn name_row(name: &str) -> Vec<Item> {
+    fn part(s: &str) -> Vec<Item> {
+        if s.chars().count() == 1 {
+            s.chars().map(Item::Char).collect()
+        } else {
+            vec![Item::Text(s.to_string())]
+        }
+    }
+    match name.split_once('_') {
+        Some((base, sub)) if !base.is_empty() && !sub.is_empty() => {
+            let mut r = part(base);
+            r.push(Item::Sub(part(sub)));
+            r
+        }
+        _ => part(name),
+    }
+}
+
 /// A variable name typed as textbook input: letters, digits and Greek letters, with an optional subscript.
 pub fn variable_name_from_row(row: &[Item]) -> Result<String, String> {
     use maximus_math::words::greek_name_of_glyph;
@@ -418,6 +433,15 @@ pub fn variable_name_from_row(row: &[Item]) -> Result<String, String> {
 mod tests {
     use super::*;
     use maximus_math::row_from_str;
+
+    #[test]
+    fn names_are_typeset_with_subscripts() {
+        assert_eq!(name_row("x"), vec![Item::Char('x')]);
+        assert_eq!(name_row("mass"), vec![Item::Text("mass".into())]);
+        assert_eq!(name_row("V_1"), vec![Item::Char('V'), Item::Sub(vec![Item::Char('1')])]);
+        assert_eq!(name_row("V_ab"), vec![Item::Char('V'), Item::Sub(vec![Item::Text("ab".into())])]);
+        assert_eq!(name_row("_x"), vec![Item::Text("_x".into())]);
+    }
 
     #[test]
     fn variable_names_from_textbook_input() {

@@ -740,7 +740,6 @@ impl MaximusApp {
                 }
             });
             ui.menu_button("Edit", |ui| {
-                ui.label(RichText::new("In an input cell: Ctrl+C copies as LaTeX, Ctrl+V pastes LaTeX or Maxima").weak().small());
                 if ui.button("Clear all outputs").clicked() {
                     self.session.notebook.clear_outputs();
                     ui.close();
