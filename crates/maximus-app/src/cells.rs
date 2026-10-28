@@ -513,24 +513,52 @@ impl MaximusApp {
             OutputItem::Plot(p) => self.show_plot_output(ui, cell, k, p),
             OutputItem::Result { label, text, .. } => {
                 let color = ui.visuals().text_color();
-                let tree = self.tree_for(text);
+                let size = self.settings.math_size;
                 ui.horizontal_top(|ui| {
                     ui.label(RichText::new(format!("({})", label.trim_start_matches('%').replace('o', "%o"))).small().weak());
-                    let resp = egui::ScrollArea::horizontal()
-                        .id_salt(("out", cell, k))
-                        .auto_shrink([true, true])
-                        .show(ui, |ui| match &tree {
-                            Some(t) => maximus_render::show_math(ui, t, self.settings.math_size, color),
-                            None => ui.add(egui::Label::new(RichText::new(text).monospace()).sense(egui::Sense::click())),
-                        })
-                        .inner;
-                    resp.context_menu(|ui| self.result_menu(ui, text));
+                    // Typeset results can be selected and copied.
+                    match self.selectable_math(ui, (cell, k), text, size, color) {
+                        Some((resp, sel)) => {
+                            resp.context_menu(|ui| self.result_menu(ui, text, sel.clone()));
+                        }
+                        None => {
+                            let resp = ui.add(egui::Label::new(RichText::new(text).monospace()).sense(egui::Sense::click()));
+                            resp.context_menu(|ui| self.result_menu(ui, text, None));
+                        }
+                    }
                 });
             }
         }
     }
 
-    fn result_menu(&mut self, ui: &mut egui::Ui, text: &str) {
+    /// A typeset result whose parts can be selected. Returns the widget response and the selection as LaTeX.
+    pub fn selectable_math(&mut self, ui: &mut egui::Ui, key: (u64, usize), text: &str, size: f32, color: Color32) -> Option<(egui::Response, Option<String>)> {
+        let tree = self.tree_for(text)?;
+        let entry = self.out_views.entry(key).or_insert_with(|| (String::new(), maximus_render::editor::EditorState::default()));
+        if entry.0 != text {
+            *entry = (text.to_string(), maximus_render::editor::EditorState::from_row((*tree).clone()));
+        }
+        let id = ui.make_persistent_id(("outview", key));
+        let width = maximus_render::layout_tree(ui.ctx(), &entry.1.row, size, false).w + 8.0;
+        let draw = |ui: &mut egui::Ui, st: &mut maximus_render::editor::EditorState| {
+            let out = maximus_render::editor_ui::math_view(ui, id, st, size, color);
+            (out.response, st.selection_latex())
+        };
+        Some(if width <= ui.available_width() {
+            draw(ui, &mut entry.1)
+        } else {
+            egui::ScrollArea::horizontal().id_salt(("selmath", key)).auto_shrink([false, true]).show(ui, |ui| draw(ui, &mut entry.1)).inner
+        })
+    }
+
+    pub fn result_menu(&mut self, ui: &mut egui::Ui, text: &str, selection: Option<String>) {
+        if let Some(sel) = selection {
+            if ui.button("Copy selection as LaTeX").clicked() {
+                ui.ctx().copy_text(sel);
+                ui.close();
+            }
+            ui.separator();
+        }
         if ui.button("Copy as LaTeX").clicked() {
             ui.ctx().copy_text(maxima_to_latex(text).unwrap_or_else(|_| text.to_string()));
             ui.close();

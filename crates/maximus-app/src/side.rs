@@ -103,7 +103,8 @@ impl MaximusApp {
             ui.label(RichText::new("No user-defined variables yet.\nTry  a: 5  or  f(x) := x^2").weak());
         }
         let color = ui.visuals().text_color();
-        let size = self.settings.math_size;
+        // A little larger than the original 16, a little smaller than the math size.
+        let size = self.settings.math_size * 0.9;
         egui::ScrollArea::vertical().id_salt("vars").max_height((ui.available_height() - 150.0).max(80.0)).show(ui, |ui| {
             for v in &vars {
                 ui.horizontal_top(|ui| {
@@ -129,27 +130,37 @@ impl MaximusApp {
                             self.var_edit = Some(edit);
                         }
                     } else {
-                        // Names are always typeset (x_1 gets a subscript, alpha becomes a Greek letter).
-                        let row: Option<Vec<Item>> = if v.is_function {
-                            self.tree_for(&v.value).map(|t| (*t).clone())
-                        } else {
-                            self.tree_for(&v.value).map(|t| {
-                                let mut r = maximus_math::sym_row(&v.name);
-                                r.push(Item::Char('='));
-                                r.extend(t.iter().cloned());
-                                r
-                            })
-                        };
-                        egui::ScrollArea::horizontal().id_salt(("var-scroll", &v.name)).auto_shrink([false, true]).show(ui, |ui| match row {
-                            Some(r) => {
-                                let resp = maximus_render::show_math(ui, &r, size, color);
-                                if resp.double_clicked() {
-                                    self.start_var_edit(v);
+                        egui::ScrollArea::horizontal().id_salt(("var-scroll", &v.name)).auto_shrink([false, true]).show(ui, |ui| {
+                            if v.is_function {
+                                match self.tree_for(&v.value) {
+                                    Some(t) => {
+                                        let r = maximus_render::show_math(ui, &t, size, color);
+                                        if r.double_clicked() {
+                                            self.start_var_edit(v);
+                                        }
+                                        r.on_hover_text("Double-click to edit");
+                                    }
+                                    None => {
+                                        ui.label(RichText::new(&v.value).monospace());
+                                    }
                                 }
-                                resp.on_hover_text("Double-click to edit");
-                            }
-                            None => {
-                                ui.label(RichText::new(format!("{} = {}", v.name, v.value)).monospace());
+                            } else {
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new(&v.name).italics().strong());
+                                    ui.label("=");
+                                    match self.tree_for(&v.value) {
+                                        Some(t) => {
+                                            let r = maximus_render::show_math(ui, &t, size, color);
+                                            if r.double_clicked() {
+                                                self.start_var_edit(v);
+                                            }
+                                            r.on_hover_text("Double-click to edit");
+                                        }
+                                        None => {
+                                            ui.label(RichText::new(&v.value).monospace());
+                                        }
+                                    }
+                                });
                             }
                         });
                     }

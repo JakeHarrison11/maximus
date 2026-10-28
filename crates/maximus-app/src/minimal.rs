@@ -167,7 +167,6 @@ impl MaximusApp {
 
         let mut recall: Option<String> = None;
         let mut approx: Option<String> = None;
-        let mut reuse: Option<String> = None;
         egui::ScrollArea::vertical().max_height(ui.available_height()).auto_shrink([false, false]).stick_to_bottom(true).show(ui, |ui| {
             ui.set_max_width(ui.available_width());
             let cells: Vec<(u64, String, InputMode, Vec<OutputItem>, CellState)> = self
@@ -197,14 +196,11 @@ impl MaximusApp {
                 for (k, o) in outs.iter().enumerate() {
                     match o {
                         OutputItem::Result { text, label, .. } => {
-                            let tree = self.tree_for(text);
                             ui.with_layout(Layout::top_down(Align::Max), |ui| {
-                                match &tree {
-                                    Some(t) => {
-                                        let r = math_fit(ui, ("out", id, k), t, size * 1.15, color, false);
-                                        if r.on_hover_text("Click to use this result").clicked() {
-                                            reuse = Some(text.clone());
-                                        }
+                                // Results can be selected; right-click offers copy and "Use as input".
+                                match self.selectable_math(ui, (id, k), text, size * 1.15, color) {
+                                    Some((resp, sel)) => {
+                                        resp.context_menu(|ui| self.result_menu(ui, text, sel.clone()));
                                     }
                                     None => {
                                         ui.label(RichText::new(text).monospace().size(size * 0.8));
@@ -236,9 +232,6 @@ impl MaximusApp {
         });
         if let Some(src) = recall {
             self.min_editor = EditorState::from_latex(&src);
-        }
-        if let Some(t) = reuse {
-            self.min_editor.paste(&t);
         }
         if let Some(label) = approx {
             let id = self.session.notebook.add_cell(CellKind::Code, InputMode::Maxima);

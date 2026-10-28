@@ -96,6 +96,11 @@ fn is_operand_item(it: &Item) -> bool {
 }
 
 impl EditorState {
+    /// An editor state holding the given tree (used to make results selectable).
+    pub fn from_row(row: Row) -> Self {
+        EditorState { row, ..Default::default() }
+    }
+
     pub fn from_latex(src: &str) -> Self {
         let row = from_latex(src);
         let mut s = EditorState { row, cur: Cursor::default(), anchor: None, undo: Vec::new() };

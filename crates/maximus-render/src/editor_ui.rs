@@ -22,27 +22,38 @@ pub struct EditorStyle {
     pub color: Color32,
     pub hint: String,
     pub min_height: f32,
+    /// Selectable but not editable (used for results).
+    pub read_only: bool,
 }
 
 impl EditorStyle {
     /// A copy with a different hint text.
     pub fn clone_with_hint(&self, hint: &str) -> EditorStyle {
-        EditorStyle { size: self.size, color: self.color, hint: hint.to_string(), min_height: self.min_height }
+        EditorStyle { size: self.size, color: self.color, hint: hint.to_string(), min_height: self.min_height, read_only: self.read_only }
     }
 
     pub fn new(size: f32, color: Color32) -> Self {
-        EditorStyle { size, color, hint: String::new(), min_height: 0.0 }
+        EditorStyle { size, color, hint: String::new(), min_height: 0.0, read_only: false }
     }
 }
 
 const UNDO_LIMIT: usize = 100;
 
+/// Shows a result so that parts of it can be selected and copied.
+pub fn math_view(ui: &mut egui::Ui, id: Id, state: &mut EditorState, size: f32, color: Color32) -> EditorOutput {
+    let mut style = EditorStyle::new(size, color);
+    style.read_only = true;
+    math_editor(ui, id, state, &style)
+}
+
 pub fn math_editor(ui: &mut egui::Ui, id: Id, state: &mut EditorState, style: &EditorStyle) -> EditorOutput {
     let ctx = ui.ctx().clone();
     let pad = 6.0;
     let mut b = layout_tree(&ctx, &state.row, style.size, true);
-    let width = ui.available_width().max(b.w + 2.0 * pad + 4.0);
-    let height = (b.height() + 2.0 * pad).max(style.size * 1.7 + 2.0 * pad).max(style.min_height);
+    let ro = style.read_only;
+    let width = if ro { b.w + 4.0 } else { ui.available_width().max(b.w + 2.0 * pad + 4.0) };
+    let height = if ro { b.height() + 4.0 } else { (b.height() + 2.0 * pad).max(style.size * 1.7 + 2.0 * pad).max(style.min_height) };
+    let pad = if ro { 2.0 } else { pad };
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
     let rect_id = id;
     let resp = ui.interact(rect, rect_id, Sense::click_and_drag());
@@ -104,7 +115,7 @@ pub fn math_editor(ui: &mut egui::Ui, id: Id, state: &mut EditorState, style: &E
     }
     let focused = ctx.memory(|m| m.has_focus(rect_id));
     if focused {
-        let in_matrix = state.in_matrix();
+        let in_matrix = state.in_matrix() && !ro;
         ctx.memory_mut(|m| {
             m.set_focus_lock_filter(
                 rect_id,
@@ -116,9 +127,14 @@ pub fn math_editor(ui: &mut egui::Ui, id: Id, state: &mut EditorState, style: &E
             let before = (state.row.clone(), state.cur.clone());
             let mut mutated = true;
             match ev {
-                Event::Text(t) => state.type_text(&t),
-                Event::Paste(t) => state.paste(&t),
+                Event::Text(t) if !ro => state.type_text(&t),
+                Event::Paste(t) if !ro => state.paste(&t),
                 Event::Copy => {
+                    let text = state.selection_latex().unwrap_or_else(|| state.latex());
+                    ctx.copy_text(text);
+                    mutated = false;
+                }
+                Event::Cut if ro => {
                     let text = state.selection_latex().unwrap_or_else(|| state.latex());
                     ctx.copy_text(text);
                     mutated = false;
@@ -136,14 +152,14 @@ pub fn math_editor(ui: &mut egui::Ui, id: Id, state: &mut EditorState, style: &E
                     }
                 }
                 Event::Key { key, pressed: true, modifiers, .. } => match key {
-                    Key::Backspace => {
+                    Key::Backspace if !ro => {
                         if state.row.is_empty() {
                             backspace_on_empty = true;
                         }
                         state.backspace()
                     }
-                    Key::Delete => state.delete_forward(),
-                    Key::Tab if in_matrix => state.matrix_tab(modifiers.shift),
+                    Key::Delete if !ro => state.delete_forward(),
+                    Key::Tab if in_matrix && !ro => state.matrix_tab(modifiers.shift),
                     Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown | Key::Home | Key::End => {
                         mutated = false;
                         let marks = &b.marks;
@@ -170,11 +186,11 @@ pub fn math_editor(ui: &mut egui::Ui, id: Id, state: &mut EditorState, style: &E
                         state.select_all();
                         mutated = false;
                     }
-                    Key::Enter => {
+                    Key::Enter if !ro => {
                         submit = true;
                         mutated = false;
                     }
-                    Key::Z if modifiers.command => {
+                    Key::Z if modifiers.command && !ro => {
                         if let Some((r, c)) = state.undo.pop() {
                             state.row = r;
                             state.cur = c;
@@ -200,7 +216,9 @@ pub fn math_editor(ui: &mut egui::Ui, id: Id, state: &mut EditorState, style: &E
     }
     let visuals = ui.visuals().clone();
     let stroke = if focused { Stroke::new(1.5, visuals.selection.stroke.color) } else { Stroke::new(1.0, visuals.widgets.noninteractive.bg_stroke.color) };
-    ui.painter().rect(rect, 4.0, visuals.extreme_bg_color, stroke, egui::StrokeKind::Inside);
+    if !ro {
+        ui.painter().rect(rect, 4.0, visuals.extreme_bg_color, stroke, egui::StrokeKind::Inside);
+    }
     let o = origin(&b);
     if state.row.is_empty() && !focused && !style.hint.is_empty() {
         ui.painter().text(
@@ -260,7 +278,7 @@ pub fn math_editor(ui: &mut egui::Ui, id: Id, state: &mut EditorState, style: &E
     }
     paint(&ui.painter().with_clip_rect(rect), o, &b, style.color);
 
-    if focused {
+    if focused && !ro {
         if let Some(m) = state.cursor_mark(&b) {
             let t = ui.input(|i| i.time);
             if (t * 1.8).fract() < 0.6 {
@@ -272,7 +290,7 @@ pub fn math_editor(ui: &mut egui::Ui, id: Id, state: &mut EditorState, style: &E
         }
     }
 
-    let help_word = if focused || secondary { state.help_word() } else { None };
+    let help_word = if !ro && (focused || secondary) { state.help_word() } else { None };
     EditorOutput { response: resp, changed, submit, focused, help_word, secondary_clicked: secondary, backspace_on_empty }
 }
 
@@ -402,5 +420,32 @@ mod tests {
         ptr(vec![Event::PointerButton { pos: pos(300.0), button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE }]);
         ptr(vec![]);
         assert_eq!(st.selection_latex().as_deref(), Some("abc"), "anchor {:?} cur {:?}", st.anchor, st.cur);
+    }
+
+    #[test]
+    fn read_only_views_select_but_do_not_edit() {
+        let ctx = Context::default();
+        crate::install_fonts(&ctx);
+        let id = Id::unique("ro");
+        let mut st = EditorState::from_latex("\\frac{1}{2}+x");
+        let run = |ctx: &Context, st: &mut EditorState, events: Vec<Event>| {
+            let mut raw = RawInput::default();
+            raw.screen_rect = Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0)));
+            raw.events = events;
+            let mut out = ctx.run_ui(raw, |ui| {
+                math_view(ui, id, st, 20.0, Color32::WHITE);
+            });
+            out.textures_delta.clear();
+        };
+        run(&ctx, &mut st, vec![]);
+        ctx.memory_mut(|m| m.request_focus(id));
+        run(&ctx, &mut st, vec![]);
+        let before = st.latex();
+        run(&ctx, &mut st, vec![Event::Text("zzz".into()), key(Key::Backspace, Modifiers::NONE), key(Key::Delete, Modifiers::NONE)]);
+        assert_eq!(st.latex(), before, "results must not be editable");
+        run(&ctx, &mut st, vec![key(Key::A, Modifiers::COMMAND)]);
+        assert_eq!(st.selection_latex().as_deref(), Some(before.as_str()));
+        run(&ctx, &mut st, vec![Event::Cut]);
+        assert_eq!(st.latex(), before, "cut only copies");
     }
 }

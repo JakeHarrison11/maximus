@@ -111,6 +111,8 @@ pub struct MaximusApp {
     pub scroll_to_cell: Option<u64>,
     pub manual_cats: Vec<(String, Vec<(String, Option<String>)>)>,
     pub run_on_start: bool,
+    /// Selection state of typeset results, by (cell, output index).
+    pub out_views: HashMap<(u64, usize), (String, EditorState)>,
     pub show_keypad: bool,
     pub matrix_dialog: Option<(usize, usize)>,
     pub last_mode: bool,
@@ -176,6 +178,7 @@ impl MaximusApp {
             scroll_to_cell: None,
             manual_cats: Vec::new(),
             run_on_start: opts.run_all,
+            out_views: HashMap::new(),
             show_keypad: true,
             matrix_dialog: None,
             last_mode,
