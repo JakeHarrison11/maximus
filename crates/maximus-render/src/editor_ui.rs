@@ -49,13 +49,49 @@ pub fn math_editor(ui: &mut egui::Ui, id: Id, state: &mut EditorState, style: &E
 
     let origin = |b: &crate::layout::Boxed| Pos2::new(rect.min.x + pad, rect.center().y + (b.asc - b.desc) / 2.0);
 
-    if resp.clicked() || resp.secondary_clicked() || resp.drag_started() {
+    let shift_held = ui.input(|i| i.modifiers.shift);
+    if resp.drag_started() {
         ctx.memory_mut(|m| m.request_focus(rect_id));
+        let o = origin(&b);
+        if let Some(p) = ui.input(|i| i.pointer.press_origin()) {
+            if shift_held {
+                state.begin_extend();
+            }
+            state.click(&b.marks, p.x - o.x, p.y - o.y);
+            if !shift_held {
+                state.anchor = Some(state.cur.clone());
+            }
+        }
+    } else if resp.clicked() || resp.secondary_clicked() {
+        ctx.memory_mut(|m| m.request_focus(rect_id));
+        secondary = resp.secondary_clicked();
+        // A right click inside an existing selection keeps it (so it can be copied).
+        if !(secondary && state.has_selection()) {
+            if let Some(p) = resp.interact_pointer_pos() {
+                let o = origin(&b);
+                if shift_held {
+                    state.begin_extend();
+                } else {
+                    state.clear_selection();
+                }
+                state.click(&b.marks, p.x - o.x, p.y - o.y);
+                state.end_extend();
+            }
+        }
+    }
+    if resp.dragged() {
         if let Some(p) = resp.interact_pointer_pos() {
             let o = origin(&b);
             state.click(&b.marks, p.x - o.x, p.y - o.y);
         }
-        secondary = resp.secondary_clicked();
+    }
+    if resp.drag_stopped() {
+        state.end_extend();
+    }
+    if resp.triple_clicked() {
+        state.select_all();
+    } else if resp.double_clicked() {
+        state.select_word();
     }
 
     if resp.hovered() {
@@ -78,12 +114,21 @@ pub fn math_editor(ui: &mut egui::Ui, id: Id, state: &mut EditorState, style: &E
                 Event::Text(t) => state.type_text(&t),
                 Event::Paste(t) => state.paste(&t),
                 Event::Copy => {
-                    ctx.copy_text(state.latex());
+                    let text = state.selection_latex().unwrap_or_else(|| state.latex());
+                    ctx.copy_text(text);
                     mutated = false;
                 }
                 Event::Cut => {
-                    ctx.copy_text(state.latex());
-                    state.clear();
+                    match state.selection_latex() {
+                        Some(t) => {
+                            ctx.copy_text(t);
+                            state.delete_selection();
+                        }
+                        None => {
+                            ctx.copy_text(state.latex());
+                            state.clear();
+                        }
+                    }
                 }
                 Event::Key { key, pressed: true, modifiers, .. } => match key {
                     Key::Backspace => {
@@ -94,28 +139,30 @@ pub fn math_editor(ui: &mut egui::Ui, id: Id, state: &mut EditorState, style: &E
                     }
                     Key::Delete => state.delete_forward(),
                     Key::Tab if in_matrix => state.matrix_tab(modifiers.shift),
-                    Key::ArrowLeft => {
-                        state.move_horizontal(&b.marks, -1);
+                    Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown | Key::Home | Key::End => {
                         mutated = false;
+                        let marks = &b.marks;
+                        let go = |s: &mut EditorState| match key {
+                            Key::ArrowLeft => s.move_horizontal(marks, -1),
+                            Key::ArrowRight => s.move_horizontal(marks, 1),
+                            Key::ArrowUp => s.move_vertical(marks, -1),
+                            Key::ArrowDown => s.move_vertical(marks, 1),
+                            Key::Home => s.move_home_end(marks, false),
+                            _ => s.move_home_end(marks, true),
+                        };
+                        if modifiers.shift {
+                            state.begin_extend();
+                            go(state);
+                            state.end_extend();
+                        } else if matches!(key, Key::ArrowLeft | Key::ArrowRight) && state.has_selection() {
+                            state.collapse_selection(key == Key::ArrowRight);
+                        } else {
+                            state.clear_selection();
+                            go(state);
+                        }
                     }
-                    Key::ArrowRight => {
-                        state.move_horizontal(&b.marks, 1);
-                        mutated = false;
-                    }
-                    Key::ArrowUp => {
-                        state.move_vertical(&b.marks, -1);
-                        mutated = false;
-                    }
-                    Key::ArrowDown => {
-                        state.move_vertical(&b.marks, 1);
-                        mutated = false;
-                    }
-                    Key::Home => {
-                        state.move_home_end(&b.marks, false);
-                        mutated = false;
-                    }
-                    Key::End => {
-                        state.move_home_end(&b.marks, true);
+                    Key::A if modifiers.command => {
+                        state.select_all();
                         mutated = false;
                     }
                     Key::Enter => {
@@ -126,6 +173,7 @@ pub fn math_editor(ui: &mut egui::Ui, id: Id, state: &mut EditorState, style: &E
                         if let Some((r, c)) = state.undo.pop() {
                             state.row = r;
                             state.cur = c;
+                            state.anchor = None;
                             changed = true;
                         }
                         mutated = false;
@@ -157,6 +205,21 @@ pub fn math_editor(ui: &mut egui::Ui, id: Id, state: &mut EditorState, style: &E
             egui::FontId::proportional(style.size * 0.8),
             style.color.gamma_multiply(0.4),
         );
+    }
+    if let Some(sel) = state.selection() {
+        let x_at = |pos: usize| b.marks.iter().find(|m| m.path == sel.path && m.pos == pos).map(|m| m.x);
+        if let (Some(x0), Some(x1)) = (x_at(sel.start), x_at(sel.end)) {
+            let (mut y0, mut y1) = (f32::MAX, f32::MIN);
+            for r in b.rows.iter().filter(|r| r.path == sel.path) {
+                y0 = y0.min(r.y0);
+                y1 = y1.max(r.y1);
+            }
+            if y0 > y1 {
+                (y0, y1) = (-style.size * 0.8, style.size * 0.25);
+            }
+            let hl = Rect::from_min_max(Pos2::new(o.x + x0.min(x1), o.y + y0 - 1.0), Pos2::new(o.x + x0.max(x1), o.y + y1 + 1.0));
+            ui.painter().with_clip_rect(rect).rect_filled(hl, 2.0, visuals.selection.bg_fill);
+        }
     }
     paint(&ui.painter().with_clip_rect(rect), o, &b, style.color);
 
@@ -243,5 +306,64 @@ mod tests {
         assert!(frame_out(&ctx, &mut st, id, vec![bs.clone()]));
         frame(&ctx, &mut st, id, vec![Event::Text("x".into())]);
         assert!(!frame_out(&ctx, &mut st, id, vec![bs]), "not empty: plain deletion");
+    }
+
+    fn key(k: Key, mods: Modifiers) -> Event {
+        Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: mods }
+    }
+
+    fn focused_editor(text: &str) -> (Context, EditorState, Id) {
+        let ctx = Context::default();
+        crate::install_fonts(&ctx);
+        let id = Id::unique("sel");
+        let mut st = EditorState::default();
+        frame(&ctx, &mut st, id, vec![]);
+        ctx.memory_mut(|m| m.request_focus(id));
+        frame(&ctx, &mut st, id, vec![]);
+        frame(&ctx, &mut st, id, vec![Event::Text(text.into())]);
+        (ctx, st, id)
+    }
+
+    #[test]
+    fn shift_arrows_select_and_typing_replaces() {
+        let (ctx, mut st, id) = focused_editor("abcd");
+        let shift = Modifiers::SHIFT;
+        frame(&ctx, &mut st, id, vec![key(Key::ArrowLeft, shift), key(Key::ArrowLeft, shift)]);
+        assert_eq!(st.selected_row().map(|r| maximus_math::row_to_latex(&r)).as_deref(), Some("cd"));
+        frame(&ctx, &mut st, id, vec![key(Key::ArrowRight, shift)]);
+        assert_eq!(st.selected_row().map(|r| maximus_math::row_to_latex(&r)).as_deref(), Some("d"));
+        frame(&ctx, &mut st, id, vec![Event::Text("X".into())]);
+        assert_eq!(st.latex(), "abcX");
+        // Plain arrows collapse without moving past the edge.
+        frame(&ctx, &mut st, id, vec![key(Key::ArrowLeft, shift), key(Key::ArrowLeft, Modifiers::NONE)]);
+        assert!(!st.has_selection());
+        assert_eq!(st.cur.pos, 3);
+    }
+
+    #[test]
+    fn select_all_cut_copy_and_undo() {
+        let (ctx, mut st, id) = focused_editor("1/2");
+        frame(&ctx, &mut st, id, vec![key(Key::A, Modifiers::COMMAND)]);
+        assert_eq!(st.selection_latex().as_deref(), Some("\\frac{1}{2}"));
+        frame(&ctx, &mut st, id, vec![Event::Cut]);
+        assert_eq!(st.latex(), "");
+        frame(&ctx, &mut st, id, vec![key(Key::Z, Modifiers::COMMAND)]);
+        assert_eq!(st.latex(), "\\frac{1}{2}");
+        assert!(!st.has_selection());
+    }
+
+    #[test]
+    fn dragging_with_the_mouse_selects() {
+        let (ctx, mut st, id) = focused_editor("abc");
+        st.cur = crate::editor::Cursor { path: vec![], pos: 3 };
+        let pos = |x: f32| Pos2::new(x, 24.0);
+        let mut ptr = |events: Vec<Event>| frame(&ctx, &mut st, id, events);
+        ptr(vec![Event::PointerMoved(pos(10.0))]);
+        ptr(vec![Event::PointerButton { pos: pos(10.0), button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE }]);
+        ptr(vec![Event::PointerMoved(pos(60.0))]);
+        ptr(vec![Event::PointerMoved(pos(300.0))]);
+        ptr(vec![Event::PointerButton { pos: pos(300.0), button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE }]);
+        ptr(vec![]);
+        assert_eq!(st.selection_latex().as_deref(), Some("abc"), "anchor {:?} cur {:?}", st.anchor, st.cur);
     }
 }

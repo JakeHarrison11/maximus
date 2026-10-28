@@ -31,6 +31,8 @@ pub enum Template {
 pub struct EditorState {
     pub row: Row,
     pub cur: Cursor,
+    /// Other end of the selection; the selection runs between this and `cur`.
+    pub anchor: Option<Cursor>,
     pub undo: Vec<(Row, Cursor)>,
 }
 
@@ -96,7 +98,7 @@ fn is_operand_item(it: &Item) -> bool {
 impl EditorState {
     pub fn from_latex(src: &str) -> Self {
         let row = from_latex(src);
-        let mut s = EditorState { row, cur: Cursor::default(), undo: Vec::new() };
+        let mut s = EditorState { row, cur: Cursor::default(), anchor: None, undo: Vec::new() };
         s.cur.pos = s.row.len();
         s
     }
@@ -130,6 +132,7 @@ impl EditorState {
     }
 
     pub fn clear(&mut self) {
+        self.anchor = None;
         self.row.clear();
         self.cur = Cursor::default();
     }
@@ -171,6 +174,23 @@ impl EditorState {
     pub fn type_char(&mut self, c: char) {
         if c.is_whitespace() || c.is_control() {
             return;
+        }
+        if self.has_selection() {
+            let wrap = match c {
+                '/' => Some(Wrap::Frac),
+                '(' | '[' | '{' => Some(Wrap::Group(c)),
+                '|' => Some(Wrap::Group('|')),
+                _ => None,
+            };
+            match wrap {
+                Some(w) => {
+                    self.wrap_selection(w);
+                    return;
+                }
+                None => {
+                    self.delete_selection();
+                }
+            }
         }
         self.clamp();
         match c {
@@ -324,6 +344,9 @@ impl EditorState {
     }
 
     pub fn backspace(&mut self) {
+        if self.delete_selection() {
+            return;
+        }
         self.clamp();
         let pos = self.cur.pos;
         if pos == 0 {
@@ -385,6 +408,9 @@ impl EditorState {
     }
 
     pub fn delete_forward(&mut self) {
+        if self.delete_selection() {
+            return;
+        }
         self.clamp();
         let pos = self.cur.pos;
         let path = self.cur.path.clone();
@@ -421,6 +447,7 @@ impl EditorState {
     }
 
     pub fn insert_row(&mut self, items: Row) {
+        self.delete_selection();
         self.clamp();
         let n = items.len();
         let pos = self.cur.pos;
@@ -433,6 +460,7 @@ impl EditorState {
 
     /// Replaces the whole content (used when pasting into an empty editor).
     pub fn set_row(&mut self, row: Row) {
+        self.anchor = None;
         self.row = row;
         self.cur = Cursor { path: vec![], pos: self.row.len() };
     }
@@ -455,10 +483,30 @@ impl EditorState {
     }
 
     pub fn insert_symbol(&mut self, c: char) {
+        self.delete_selection();
         self.put(Item::Char(c));
     }
 
     pub fn insert_template(&mut self, t: Template) {
+        if self.has_selection() {
+            let wrap = match t {
+                Template::Frac => Some(Wrap::Frac),
+                Template::Sqrt => Some(Wrap::Sqrt),
+                Template::NthRoot => Some(Wrap::NthRoot),
+                Template::Paren => Some(Wrap::Group('(')),
+                Template::Abs => Some(Wrap::Group('|')),
+                _ => None,
+            };
+            match wrap {
+                Some(w) => {
+                    self.wrap_selection(w);
+                    return;
+                }
+                None => {
+                    self.delete_selection();
+                }
+            }
+        }
         self.clamp();
         let pos = self.cur.pos;
         match t {
@@ -776,6 +824,168 @@ impl EditorState {
     }
 }
 
+
+/// A selected run of items `start..end` in the row at `path`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Selection {
+    pub path: Path,
+    pub start: usize,
+    pub end: usize,
+}
+
+/// Which structure to wrap a selection in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Wrap {
+    Frac,
+    Sqrt,
+    NthRoot,
+    Group(char),
+}
+
+impl EditorState {
+    fn endpoint_valid(&mut self, c: &Cursor) -> bool {
+        match row_at(&mut self.row, &c.path) {
+            Some(r) => c.pos <= r.len(),
+            None => false,
+        }
+    }
+
+    /// The current selection, as whole items of the deepest row containing both ends.
+    /// An end that sits inside a structure (say a denominator) selects that whole structure.
+    pub fn selection(&mut self) -> Option<Selection> {
+        let a = self.anchor.clone()?;
+        let c = self.cur.clone();
+        if a == c || !self.endpoint_valid(&a) || !self.endpoint_valid(&c) {
+            return None;
+        }
+        let k = a.path.iter().zip(c.path.iter()).take_while(|(x, y)| x == y).count();
+        let span = |e: &Cursor| -> (usize, usize) {
+            if e.path.len() > k {
+                (e.path[k].0, e.path[k].0 + 1)
+            } else {
+                (e.pos, e.pos)
+            }
+        };
+        let (a0, a1) = span(&a);
+        let (c0, c1) = span(&c);
+        let (start, end) = (a0.min(c0), a1.max(c1));
+        (start < end).then(|| Selection { path: a.path[..k].to_vec(), start, end })
+    }
+
+    pub fn has_selection(&mut self) -> bool {
+        self.selection().is_some()
+    }
+
+    /// The selected items.
+    pub fn selected_row(&mut self) -> Option<Row> {
+        let s = self.selection()?;
+        row_at(&mut self.row, &s.path).map(|r| r[s.start..s.end].to_vec())
+    }
+
+    /// LaTeX of the selection, if there is one.
+    pub fn selection_latex(&mut self) -> Option<String> {
+        self.selected_row().map(|r| row_to_latex(&r))
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.anchor = None;
+    }
+
+    /// Removes the selected items. Returns whether anything was selected.
+    pub fn delete_selection(&mut self) -> bool {
+        let Some(s) = self.selection() else {
+            self.anchor = None;
+            return false;
+        };
+        if let Some(r) = row_at(&mut self.row, &s.path) {
+            r.drain(s.start..s.end);
+        }
+        self.cur = Cursor { path: s.path, pos: s.start };
+        self.anchor = None;
+        true
+    }
+
+    pub fn select_all(&mut self) {
+        self.anchor = Some(Cursor { path: vec![], pos: 0 });
+        self.cur = Cursor { path: vec![], pos: self.row.len() };
+        if self.row.is_empty() {
+            self.anchor = None;
+        }
+    }
+
+    /// Selects the word (letters and digits) around the cursor, or everything if there is none.
+    pub fn select_word(&mut self) {
+        self.clamp();
+        let path = self.cur.path.clone();
+        let pos = self.cur.pos;
+        let r = self.cur_row().clone();
+        let is_w = |it: &Item| matches!(it, Item::Char(c) if c.is_alphanumeric() || *c == '.') || matches!(it, Item::Func(_));
+        let mut s = pos;
+        while s > 0 && is_w(&r[s - 1]) {
+            s -= 1;
+        }
+        let mut e = pos;
+        while e < r.len() && is_w(&r[e]) {
+            e += 1;
+        }
+        if s == e {
+            self.select_all();
+        } else {
+            self.anchor = Some(Cursor { path: path.clone(), pos: s });
+            self.cur = Cursor { path, pos: e };
+        }
+    }
+
+    /// Replaces the selection by `wrap` around it. Returns false when nothing is selected.
+    pub fn wrap_selection(&mut self, wrap: Wrap) -> bool {
+        let Some(s) = self.selection() else { return false };
+        let Some(row) = row_at(&mut self.row, &s.path) else { return false };
+        let sel: Row = row.drain(s.start..s.end).collect();
+        let (item, inner): (Item, Option<usize>) = match wrap {
+            Wrap::Frac => (Item::Frac(sel, vec![]), Some(1)),
+            Wrap::Sqrt => (Item::Sqrt(None, sel), None),
+            Wrap::NthRoot => (Item::Sqrt(Some(vec![]), sel), Some(1)),
+            Wrap::Group(o) => (Item::Group(o, closer_of(o), sel), None),
+        };
+        row.insert(s.start, item);
+        self.anchor = None;
+        self.cur = match inner {
+            Some(slot) => {
+                let mut p = s.path;
+                p.push((s.start, slot));
+                Cursor { path: p, pos: 0 }
+            }
+            None => Cursor { path: s.path, pos: s.start + 1 },
+        };
+        true
+    }
+
+    /// Starts (or keeps) a selection so that the next cursor move extends it.
+    pub fn begin_extend(&mut self) {
+        if self.anchor.is_none() {
+            self.anchor = Some(self.cur.clone());
+        }
+    }
+
+    /// Drops the selection if it has collapsed to nothing.
+    pub fn end_extend(&mut self) {
+        if self.anchor.as_ref() == Some(&self.cur) {
+            self.anchor = None;
+        }
+    }
+
+    /// Collapses the selection to its left or right edge (what the arrow keys do).
+    pub fn collapse_selection(&mut self, to_end: bool) -> bool {
+        let Some(s) = self.selection() else {
+            self.anchor = None;
+            return false;
+        };
+        self.cur = Cursor { path: s.path, pos: if to_end { s.end } else { s.start } };
+        self.anchor = None;
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -942,5 +1152,117 @@ mod help_tests {
         let mut e = EditorState::default();
         e.insert_template(Template::Sum);
         assert_eq!(e.help_word().as_deref(), Some("sum"));
+    }
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+
+    fn typed(s: &str) -> EditorState {
+        let mut e = EditorState::default();
+        e.type_text(s);
+        e
+    }
+
+    fn select(e: &mut EditorState, a: (Vec<(usize, usize)>, usize), c: (Vec<(usize, usize)>, usize)) {
+        e.anchor = Some(Cursor { path: a.0, pos: a.1 });
+        e.cur = Cursor { path: c.0, pos: c.1 };
+    }
+
+    #[test]
+    fn selection_within_a_row() {
+        let mut e = typed("a+bc");
+        select(&mut e, (vec![], 1), (vec![], 3));
+        assert_eq!(e.selection(), Some(Selection { path: vec![], start: 1, end: 3 }));
+        assert_eq!(e.selection_latex().as_deref(), Some("+b"));
+        assert!(e.delete_selection());
+        assert_eq!(e.latex(), "ac");
+        assert_eq!(e.cur, Cursor { path: vec![], pos: 1 });
+        assert!(e.anchor.is_none());
+    }
+
+    #[test]
+    fn selection_spanning_numerator_and_denominator_takes_the_whole_fraction() {
+        let mut e = typed("x+1/2");
+        select(&mut e, (vec![(2, 0)], 0), (vec![(2, 1)], 1));
+        assert_eq!(e.selection(), Some(Selection { path: vec![], start: 2, end: 3 }));
+        e.backspace();
+        assert_eq!(e.latex(), "x+");
+    }
+
+    #[test]
+    fn selection_inside_a_slot_stays_in_the_slot() {
+        let mut e = typed("1/abc");
+        select(&mut e, (vec![(0, 1)], 0), (vec![(0, 1)], 2));
+        assert_eq!(e.selection(), Some(Selection { path: vec![(0, 1)], start: 0, end: 2 }));
+        e.type_text("z");
+        assert_eq!(e.latex(), "\\frac{1}{zc}");
+    }
+
+    #[test]
+    fn selection_from_inside_a_structure_to_outside() {
+        let mut e = typed("1/2");
+        e.cur = Cursor { path: vec![], pos: 1 };
+        e.type_text("+y");
+        // From the numerator to after `y`: everything from the fraction on is selected.
+        select(&mut e, (vec![(0, 0)], 0), (vec![], 3));
+        assert_eq!(e.selection(), Some(Selection { path: vec![], start: 0, end: 3 }));
+    }
+
+    #[test]
+    fn typing_replaces_the_selection() {
+        let mut e = typed("abc");
+        select(&mut e, (vec![], 0), (vec![], 2));
+        e.type_text("x");
+        assert_eq!(e.latex(), "xc");
+    }
+
+    #[test]
+    fn slash_and_brackets_wrap_the_selection() {
+        let mut e = typed("a+b");
+        e.select_all();
+        e.type_char('/');
+        assert_eq!(e.latex(), "\\frac{a+b}{}");
+        assert_eq!(e.cur, Cursor { path: vec![(0, 1)], pos: 0 });
+        let mut e = typed("a+b");
+        select(&mut e, (vec![], 2), (vec![], 3));
+        e.type_char('(');
+        assert_eq!(e.latex(), "a+\\left( b \\right)");
+        assert_eq!(e.cur, Cursor { path: vec![], pos: 3 });
+        let mut e = typed("x+1");
+        e.select_all();
+        e.insert_template(Template::Sqrt);
+        assert_eq!(e.latex(), "\\sqrt{x+1}");
+        let mut e = typed("x");
+        e.select_all();
+        e.insert_template(Template::NthRoot);
+        assert_eq!(e.latex(), "\\sqrt[]{x}");
+        assert_eq!(e.cur.path, vec![(0, 1)]);
+    }
+
+    #[test]
+    fn paste_replaces_selection() {
+        let mut e = typed("abc");
+        select(&mut e, (vec![], 1), (vec![], 2));
+        e.paste("\\frac{1}{2}");
+        assert_eq!(e.latex(), "a\\frac{1}{2}c");
+    }
+
+    #[test]
+    fn word_and_all_selection_and_collapse() {
+        let mut e = typed("1+abc");
+        e.cur = Cursor { path: vec![], pos: 3 };
+        e.select_word();
+        assert_eq!(e.selection(), Some(Selection { path: vec![], start: 2, end: 5 }));
+        assert!(e.collapse_selection(false));
+        assert_eq!(e.cur.pos, 2);
+        e.select_all();
+        assert_eq!(e.selection(), Some(Selection { path: vec![], start: 0, end: 5 }));
+        assert!(e.collapse_selection(true));
+        assert_eq!(e.cur.pos, 5);
+        // A stale anchor (for example after the row changed) yields no selection.
+        e.anchor = Some(Cursor { path: vec![(9, 0)], pos: 0 });
+        assert_eq!(e.selection(), None);
     }
 }

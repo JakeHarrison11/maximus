@@ -408,12 +408,21 @@ impl MaximusApp {
                     }
                     ui.separator();
                 }
-                let (latex, row) = self.cell_ui.get(&id).map(|c| (c.editor.latex(), c.editor.row.clone())).unwrap_or_default();
-                if ui.button("Copy as LaTeX").clicked() {
+                // With a selection the copy actions apply to the selection only.
+                let (latex, row, has_sel) = self
+                    .cell_ui
+                    .get_mut(&id)
+                    .map(|c| match c.editor.selected_row() {
+                        Some(r) => (maximus_math::row_to_latex(&r), r, true),
+                        None => (c.editor.latex(), c.editor.row.clone(), false),
+                    })
+                    .unwrap_or_default();
+                let suffix = if has_sel { " (selection)" } else { "" };
+                if ui.button(format!("Copy as LaTeX{}", suffix)).clicked() {
                     ui.ctx().copy_text(latex.clone());
                     ui.close();
                 }
-                if ui.button("Copy as Maxima").clicked() {
+                if ui.button(format!("Copy as Maxima{}", suffix)).clicked() {
                     match tree_to_plain_maxima(&row, &self.session.parse_ctx()) {
                         Ok(m) => ui.ctx().copy_text(m),
                         Err(e) => self.messages.push(format!("Cannot convert: {}", e)),

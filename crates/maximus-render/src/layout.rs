@@ -37,6 +37,14 @@ pub struct Mark {
     pub y1: f32,
 }
 
+/// Vertical extent of one row of the tree (editor mode), used to draw selections.
+#[derive(Clone, Debug)]
+pub struct RowExtent {
+    pub path: Path,
+    pub y0: f32,
+    pub y1: f32,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Boxed {
     pub w: f32,
@@ -44,6 +52,7 @@ pub struct Boxed {
     pub desc: f32,
     pub ops: Vec<Op>,
     pub marks: Vec<Mark>,
+    pub rows: Vec<RowExtent>,
 }
 
 impl Boxed {
@@ -77,6 +86,11 @@ impl Boxed {
                 }
             }
             self.ops.push(op);
+        }
+        for mut r in child.rows {
+            r.y0 += dy;
+            r.y1 += dy;
+            self.rows.push(r);
         }
         for mut m in child.marks {
             m.x += dx;
@@ -142,6 +156,7 @@ impl<'a> Layout<'a> {
             desc: DESC * size,
             ops: vec![Op::Text { x: 0.0, y: 0.0, text: text.to_string(), size, font }],
             marks: vec![],
+            rows: vec![],
         }
     }
 
@@ -157,7 +172,7 @@ impl<'a> Layout<'a> {
 
     fn row_from(&self, row: &[Item], start: usize, size: f32, path: &mut Path, prev: Prev) -> Boxed {
         let mut st = State {
-            out: Boxed { w: 0.0, asc: ASC * size, desc: DESC * size, ops: vec![], marks: vec![] },
+            out: Boxed { w: 0.0, asc: ASC * size, desc: DESC * size, ops: vec![], marks: vec![], rows: vec![] },
             prev,
             pending_gap: 0.0,
             last: None,
@@ -353,6 +368,7 @@ impl<'a> Layout<'a> {
                     st.last = None;
                     if self.editing {
                         st.out.marks.push(Mark { path: path.clone(), pos: row.len(), x: st.out.w, y0: -ASC * size, y1: DESC * size });
+                        st.out.rows.push(RowExtent { path: path.clone(), y0: -st.out.asc, y1: st.out.desc });
                     }
                     return st.out;
                 }
@@ -360,6 +376,9 @@ impl<'a> Layout<'a> {
             i += 1;
         }
         self.mark(&mut st, path, row.len(), size);
+        if self.editing {
+            st.out.rows.push(RowExtent { path: path.clone(), y0: -st.out.asc, y1: st.out.desc });
+        }
         st.out
     }
 
@@ -444,6 +463,7 @@ impl<'a> Layout<'a> {
                 desc: DESC * size,
                 ops: vec![Op::Placeholder { x: 0.0, y: -ASC * size, w, h: (ASC + DESC) * size }],
                 marks: vec![],
+                rows: vec![],
             };
             b.marks.push(Mark { path: path.clone(), pos: 0, x: w * 0.5, y0: -ASC * size, y1: DESC * size });
             return b;
@@ -496,7 +516,7 @@ impl<'a> Layout<'a> {
         let gap = 0.16 * size;
         let pad = 0.12 * size;
         let w = n.w.max(d.w) + 2.0 * pad;
-        let mut b = Boxed { w, asc: 0.0, desc: 0.0, ops: vec![], marks: vec![] };
+        let mut b = Boxed { w, asc: 0.0, desc: 0.0, ops: vec![], marks: vec![], rows: vec![] };
         let (nw, dw) = (n.w, d.w);
         let (nd, da) = (n.desc, d.asc);
         let (nasc, ddesc) = (n.asc, d.desc);
@@ -520,7 +540,7 @@ impl<'a> Layout<'a> {
         let ymid = bottom - 0.45 * h;
         let bw = body.w;
         let (basc, bdesc) = (body.asc, body.desc);
-        let mut b = Boxed { w: x0 + sw + pad + bw + pad, asc: -top, desc: bottom, ops: vec![], marks: vec![] };
+        let mut b = Boxed { w: x0 + sw + pad + bw + pad, asc: -top, desc: bottom, ops: vec![], marks: vec![], rows: vec![] };
         b.ops.push(Op::Poly {
             pts: vec![
                 (x0, ymid),
@@ -551,7 +571,7 @@ impl<'a> Layout<'a> {
         }
         let (lw, rw) = (self.delim_width(open, tall, size), self.delim_width(close, tall, size));
         let bw = body.w;
-        let mut b = Boxed { w: lw + bw + rw, asc, desc, ops: vec![], marks: vec![] };
+        let mut b = Boxed { w: lw + bw + rw, asc, desc, ops: vec![], marks: vec![], rows: vec![] };
         self.draw_delim(&mut b, open, true, 0.0, asc, desc, lw, tall, size);
         b.place(body, lw, 0.0);
         self.draw_delim(&mut b, close, false, lw + bw, asc, desc, rw, tall, size);
@@ -641,7 +661,7 @@ impl<'a> Layout<'a> {
         let axis = AXIS * size;
         let asc = total_h / 2.0 + axis;
         let desc = total_h / 2.0 - axis;
-        let mut grid = Boxed { w: inner_w, asc, desc, ops: vec![], marks: vec![] };
+        let mut grid = Boxed { w: inner_w, asc, desc, ops: vec![], marks: vec![], rows: vec![] };
         let mut y = -asc;
         for (r, (ra, rd)) in cells.into_iter().zip(rows_h.iter()) {
             let base = y + ra;
@@ -665,7 +685,7 @@ impl<'a> Layout<'a> {
                 let h = (rest_h * 1.05).clamp(1.9 * size, 3.8 * size);
                 let w = (0.28 * h).clamp(0.42 * size, 0.75 * size);
                 let (top, bottom) = (-(axis + h / 2.0), h / 2.0 - axis);
-                let mut b = Boxed { w, asc: axis + h / 2.0, desc: h / 2.0 - axis, ops: vec![], marks: vec![] };
+                let mut b = Boxed { w, asc: axis + h / 2.0, desc: h / 2.0 - axis, ops: vec![], marks: vec![], rows: vec![] };
                 b.ops.push(Op::Poly { pts: integral_curve(w, top, h), width: (size * 0.075).max(1.2) });
                 let gap = 0.06 * size;
                 let mut total = w;
@@ -689,7 +709,7 @@ impl<'a> Layout<'a> {
                 let half = 0.5 * ss;
                 let gap = 0.1 * size;
                 let w = sw.max(hi.as_ref().map_or(0.0, |h| h.w)).max(lo.as_ref().map_or(0.0, |l| l.w));
-                let mut b = Boxed { w, asc: axis + half, desc: half - axis, ops: vec![], marks: vec![] };
+                let mut b = Boxed { w, asc: axis + half, desc: half - axis, ops: vec![], marks: vec![], rows: vec![] };
                 b.ops.push(Op::Text { x: (w - sw) / 2.0, y: -axis + 0.3 * ss, text: glyph.into(), size: ss, font: FontKind::Roman });
                 if let Some(h) = hi {
                     let hw = h.w;
@@ -707,7 +727,7 @@ impl<'a> Layout<'a> {
                 let t = self.text_box("lim", size, FontKind::Roman);
                 let tw = t.w;
                 let w = tw.max(lo.as_ref().map_or(0.0, |l| l.w));
-                let mut b = Boxed { w, asc: t.asc, desc: t.desc, ops: vec![], marks: vec![] };
+                let mut b = Boxed { w, asc: t.asc, desc: t.desc, ops: vec![], marks: vec![], rows: vec![] };
                 b.place(t, (w - tw) / 2.0, 0.0);
                 if let Some(l) = lo {
                     let lw = l.w;
