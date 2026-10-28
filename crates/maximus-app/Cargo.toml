@@ -22,7 +22,7 @@ maximus-help.workspace = true
 maximus-plot.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "wayland", "x11", "clipboard", "links"] }
 egui_plot = "0.38"
 egui_extras = { version = "0.37", default-features = false, features = ["image", "file"] }
 
