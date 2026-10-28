@@ -133,6 +133,7 @@ pub struct MaximusApp {
     pub show_keypad: bool,
     pub matrix_dialog: Option<(usize, usize)>,
     pub last_mode: bool,
+    pub min_applied: Option<(bool, f32)>,
     pub resize_hold_until: f64,
     pub size_dirty_since: Option<f64>,
     pub min_scroll_frames: u32,
@@ -200,6 +201,7 @@ impl MaximusApp {
             show_keypad: true,
             matrix_dialog: None,
             last_mode,
+            min_applied: None,
             resize_hold_until: 0.0,
             size_dirty_since: None,
             min_scroll_frames: 0,
@@ -492,6 +494,12 @@ impl MaximusApp {
             self.settings.save();
             self.resize_hold_until = now + 0.6;
         }
+        // The minimum is in logical pixels like the stored sizes, so it follows mode and UI scale.
+        if self.min_applied != Some((self.settings.minimal, zoom)) {
+            self.min_applied = Some((self.settings.minimal, zoom));
+            let [mw, mh] = settings::min_size(self.settings.minimal, zoom);
+            ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(egui::vec2(mw / zoom, mh / zoom)));
+        }
         if self.settings.minimal != self.last_mode {
             self.last_mode = self.settings.minimal;
             // Sizes are stored in logical pixels; egui sizes are in points, which the UI scale stretches.
@@ -508,6 +516,8 @@ impl MaximusApp {
         {
             let r = ctx.input(|i| i.viewport().inner_rect).unwrap_or_else(|| ctx.viewport_rect());
             let size = [(r.width() * zoom).round(), (r.height() * zoom).round()];
+            let min = settings::min_size(self.settings.minimal, zoom);
+            let size = [size[0].max(min[0]), size[1].max(min[1])];
             let slot = if self.settings.minimal { &mut self.settings.minimal_size } else { &mut self.settings.full_size };
             if (slot[0] - size[0]).abs() >= 1.0 || (slot[1] - size[1]).abs() >= 1.0 {
                 *slot = size;

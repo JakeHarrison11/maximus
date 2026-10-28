@@ -17,6 +17,9 @@ pub enum SideTab {
 
 pub const DEFAULT_FULL_SIZE: [f32; 2] = [1180.0, 800.0];
 pub const DEFAULT_MINIMAL_SIZE: [f32; 2] = [460.0, 740.0];
+/// Smallest window in which each mode stays usable, in points (logical pixels at 100% UI scale).
+pub const MIN_FULL_SIZE: [f32; 2] = [640.0, 440.0];
+pub const MIN_MINIMAL_SIZE: [f32; 2] = [400.0, 500.0];
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
@@ -100,15 +103,11 @@ impl Settings {
         s
     }
 
-    /// Replaces absurd saved values (for example windows shrunk by an earlier bug) with the defaults.
+    /// Raises saved window sizes that are below the usable minimum (for example from an earlier bug).
     pub fn sanitize(&mut self) {
-        if self.full_size[0] < 640.0 || self.full_size[1] < 480.0 {
-            self.full_size = DEFAULT_FULL_SIZE;
-        }
-        if self.minimal_size[0] < 360.0 || self.minimal_size[1] < 480.0 {
-            self.minimal_size = DEFAULT_MINIMAL_SIZE;
-        }
         self.ui_scale = self.ui_scale.clamp(0.5, 3.0);
+        self.full_size = clamp_size(self.full_size, min_size(false, self.ui_scale));
+        self.minimal_size = clamp_size(self.minimal_size, min_size(true, self.ui_scale));
         self.side_fraction = self.side_fraction.clamp(0.15, 0.5);
     }
 
@@ -122,12 +121,22 @@ impl Settings {
 
 impl Settings {
     pub fn size_for_mode(&self) -> [f32; 2] {
-        if self.minimal {
-            self.minimal_size
-        } else {
-            self.full_size
-        }
+        clamp_size(if self.minimal { self.minimal_size } else { self.full_size }, self.min_size_for_mode())
     }
+
+    pub fn min_size_for_mode(&self) -> [f32; 2] {
+        min_size(self.minimal, self.ui_scale)
+    }
+}
+
+/// Minimum window size in logical pixels; a larger UI scale needs a proportionally larger window.
+pub fn min_size(minimal: bool, ui_scale: f32) -> [f32; 2] {
+    let base = if minimal { MIN_MINIMAL_SIZE } else { MIN_FULL_SIZE };
+    [(base[0] * ui_scale).ceil(), (base[1] * ui_scale).ceil()]
+}
+
+fn clamp_size(size: [f32; 2], min: [f32; 2]) -> [f32; 2] {
+    [size[0].max(min[0]), size[1].max(min[1])]
 }
 
 #[cfg(test)]
@@ -135,11 +144,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn shrunken_sizes_are_reset_but_sensible_ones_kept() {
+    fn undersized_windows_are_raised_to_the_minimum_but_sensible_ones_kept() {
         let mut s = Settings { full_size: [410.0, 307.0], minimal_size: [460.0, 740.0], ..Default::default() };
         s.sanitize();
-        assert_eq!(s.full_size, DEFAULT_FULL_SIZE);
+        assert_eq!(s.full_size, MIN_FULL_SIZE);
         assert_eq!(s.minimal_size, [460.0, 740.0]);
+        s.minimal = true;
+        s.minimal_size = [100.0, 100.0];
+        assert_eq!(s.size_for_mode(), MIN_MINIMAL_SIZE);
+        s.ui_scale = 2.0;
+        assert_eq!(s.size_for_mode(), [800.0, 1000.0]);
         let mut s = Settings { full_size: [900.0, 700.0], ..Default::default() };
         s.sanitize();
         assert_eq!(s.full_size, [900.0, 700.0]);

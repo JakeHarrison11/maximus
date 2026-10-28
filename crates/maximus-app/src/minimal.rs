@@ -107,8 +107,10 @@ impl MaximusApp {
                 return;
             }
             ui.add_space(4.0);
+            // Eight columns shrink to fit narrow windows instead of being clipped.
+            let key_w = ((ui.available_width() - 7.0 * 4.0) / 8.0).clamp(30.0, 46.0).floor();
             egui::Grid::new("keypad").spacing([4.0, 4.0]).show(ui, |ui| {
-                let w = 46.0;
+                let w = key_w;
                 // Row 1
                 self.key(ui, "x²", Insert::Template(Template::Sup), w);
                 self.key(ui, "√", Insert::Template(Template::Sqrt), w);
