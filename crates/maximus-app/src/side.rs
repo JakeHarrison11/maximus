@@ -108,9 +108,11 @@ impl MaximusApp {
         egui::ScrollArea::vertical().id_salt("vars").max_height((ui.available_height() - 150.0).max(80.0)).show(ui, |ui| {
             for v in &vars {
                 let mut delete_slot = egui::Rect::NOTHING;
+                let mut edit_slot = egui::Rect::NOTHING;
                 let row = ui.horizontal(|ui| {
                     // The delete button is placed once the row's height is known, so it is centred on the row.
                     delete_slot = ui.allocate_space(egui::vec2(22.0, 22.0)).1;
+                    edit_slot = ui.allocate_space(egui::vec2(22.0, 22.0)).1;
                     let editing = self.var_edit.as_ref().map_or(false, |e| e.name == v.name);
                     if editing {
                         let mut edit = self.var_edit.take().unwrap();
@@ -129,30 +131,50 @@ impl MaximusApp {
                             self.var_edit = Some(edit);
                         }
                     } else {
-                        // Every row uses the same font and size: the name, an equals sign and the typeset value.
-                        let math_text = |s: &str| RichText::new(s.to_string()).family(maximus_render::italic_family()).size(size);
-                        egui::ScrollArea::horizontal().id_salt(("var-scroll", &v.name)).auto_shrink([false, true]).show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                let value_tree = self.tree_for(&v.value);
-                                if !v.is_function {
-                                    ui.label(math_text(&v.name));
-                                    ui.label(RichText::new("=").family(maximus_render::roman_family()).size(size));
+                        // One typeset line per row (name = value), so it looks the same everywhere and can be selected.
+                        let mut row: Vec<Item> = Vec::new();
+                        let value_tree = self.tree_for(&v.value);
+                        if !v.is_function {
+                            if v.name.chars().count() == 1 {
+                                row.extend(v.name.chars().map(Item::Char));
+                            } else {
+                                row.push(Item::Text(v.name.clone()));
+                            }
+                            row.push(Item::Char('='));
+                        }
+                        match value_tree {
+                            Some(t) => row.extend(t.iter().cloned()),
+                            None => row.push(Item::Text(v.value.clone())),
+                        }
+                        let key = (u64::MAX, {
+                            use std::hash::{Hash, Hasher};
+                            let mut h = std::collections::hash_map::DefaultHasher::new();
+                            v.name.hash(&mut h);
+                            h.finish() as usize
+                        });
+                        let (resp, sel) = self.selectable_tree(ui, key, &format!("{}={}", v.name, v.value), &row, size, color);
+                        resp.context_menu(|ui| {
+                            if ui.button("Edit").clicked() {
+                                self.start_var_edit(v);
+                                ui.close();
+                            }
+                            if let Some(sel) = sel.clone() {
+                                ui.separator();
+                                if ui.button("Copy as LaTeX").clicked() {
+                                    ui.ctx().copy_text(maximus_math::row_to_latex(&sel));
+                                    ui.close();
                                 }
-                                let resp = match value_tree {
-                                    Some(t) => maximus_render::show_math(ui, &t, size, color),
-                                    None => ui.label(RichText::new(&v.value).family(maximus_render::roman_family()).size(size)),
-                                };
-                                if resp.double_clicked() {
-                                    self.start_var_edit(v);
-                                }
-                                resp.on_hover_text("Double-click to edit");
-                            });
+                            }
                         });
                     }
                 });
                 let slot = egui::Rect::from_center_size(egui::pos2(delete_slot.center().x, row.response.rect.center().y), delete_slot.size());
                 if ui.put(slot, |ui: &mut egui::Ui| icons::icon_button(ui, Icon::Trash, slot.size(), false).on_hover_text("Delete")).clicked() {
                     self.session.remove_variable(&v.name);
+                }
+                let eslot = egui::Rect::from_center_size(egui::pos2(edit_slot.center().x, row.response.rect.center().y), edit_slot.size());
+                if ui.put(eslot, |ui: &mut egui::Ui| icons::icon_button(ui, Icon::Edit, eslot.size(), false).on_hover_text("Edit")).clicked() {
+                    self.start_var_edit(v);
                 }
                 ui.separator();
             }
@@ -173,7 +195,7 @@ impl MaximusApp {
                     ui.memory_mut(|m| m.request_focus(value_id));
                 }
             });
-            ui.label("=");
+            ui.label(RichText::new("=").size(size));
             let s2 = style.clone_with_hint("value");
             let w = (ui.available_width() - 56.0).max(60.0);
             ui.allocate_ui(egui::vec2(w, 0.0), |ui| {

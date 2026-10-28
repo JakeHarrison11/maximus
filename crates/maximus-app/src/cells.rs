@@ -527,12 +527,18 @@ impl MaximusApp {
         }
     }
 
-    /// A typeset result whose parts can be selected. Returns the widget response and the selection as LaTeX.
+    /// A typeset result whose parts can be selected. Returns the widget response and the selection.
     pub fn selectable_math(&mut self, ui: &mut egui::Ui, key: (u64, usize), text: &str, size: f32, color: Color32) -> Option<(egui::Response, Option<maximus_math::Row>)> {
         let tree = self.tree_for(text)?;
+        Some(self.selectable_tree(ui, key, text, &tree, size, color))
+    }
+
+    /// Shows `tree` so that parts of it can be selected. `signature` identifies the content: the selection
+    /// is reset when it changes.
+    pub fn selectable_tree(&mut self, ui: &mut egui::Ui, key: (u64, usize), signature: &str, tree: &maximus_math::Row, size: f32, color: Color32) -> (egui::Response, Option<maximus_math::Row>) {
         let entry = self.out_views.entry(key).or_insert_with(|| (String::new(), maximus_render::editor::EditorState::default()));
-        if entry.0 != text {
-            *entry = (text.to_string(), maximus_render::editor::EditorState::from_row((*tree).clone()));
+        if entry.0 != signature {
+            *entry = (signature.to_string(), maximus_render::editor::EditorState::from_row(tree.clone()));
         }
         let id = ui.make_persistent_id(("outview", key));
         let width = maximus_render::layout_tree(ui.ctx(), &entry.1.row, size, false).w + 8.0;
@@ -540,11 +546,11 @@ impl MaximusApp {
             let out = maximus_render::editor_ui::math_view(ui, id, st, size, color);
             (out.response, st.selected_row())
         };
-        Some(if width <= ui.available_width() {
+        if width <= ui.available_width() {
             draw(ui, &mut entry.1)
         } else {
             egui::ScrollArea::horizontal().id_salt(("selmath", key)).auto_shrink([false, true]).show(ui, |ui| draw(ui, &mut entry.1)).inner
-        })
+        }
     }
 
     /// Maxima functions mentioned in a result that have documentation.

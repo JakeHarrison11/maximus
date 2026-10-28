@@ -9,6 +9,7 @@ pub enum Icon {
     Play,
     Dots,
     Trash,
+    Edit,
     Check,
     Cross,
     Backspace,
@@ -44,6 +45,13 @@ pub fn draw_icon(ui: &Ui, icon: Icon, center: Pos2, size: f32, color: Color32) {
             p.add(Shape::line(vec![pt(-0.25, -0.4), pt(-0.25, -0.8), pt(0.25, -0.8), pt(0.25, -0.4)], t));
             p.line_segment([pt(-0.18, 0.05), pt(-0.15, 0.65)], t);
             p.line_segment([pt(0.18, 0.05), pt(0.15, 0.65)], t);
+        }
+        Icon::Edit => {
+            let s = s * 1.2;
+            let t = Stroke::new((size * 0.13).max(1.3), color);
+            let pt = |dx: f32, dy: f32| Pos2::new(center.x + dx * s, center.y + dy * s);
+            p.add(Shape::closed_line(vec![pt(0.65, -0.85), pt(0.9, -0.6), pt(-0.45, 0.75), pt(-0.8, 0.8), pt(-0.75, 0.45)], t));
+            p.line_segment([pt(0.35, -0.55), pt(0.6, -0.3)], t);
         }
         Icon::Cross => {
             let d = 0.6 * s;
