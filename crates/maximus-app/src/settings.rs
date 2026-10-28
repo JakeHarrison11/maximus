@@ -92,10 +92,24 @@ pub fn plugin_dir() -> Option<PathBuf> {
 
 impl Settings {
     pub fn load() -> Settings {
-        config_dir()
+        let mut s: Settings = config_dir()
             .and_then(|d| std::fs::read_to_string(d.join("settings.json")).ok())
             .and_then(|t| serde_json::from_str(&t).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        s.sanitize();
+        s
+    }
+
+    /// Replaces absurd saved values (for example windows shrunk by an earlier bug) with the defaults.
+    pub fn sanitize(&mut self) {
+        if self.full_size[0] < 640.0 || self.full_size[1] < 480.0 {
+            self.full_size = DEFAULT_FULL_SIZE;
+        }
+        if self.minimal_size[0] < 360.0 || self.minimal_size[1] < 480.0 {
+            self.minimal_size = DEFAULT_MINIMAL_SIZE;
+        }
+        self.ui_scale = self.ui_scale.clamp(0.5, 3.0);
+        self.side_fraction = self.side_fraction.clamp(0.15, 0.5);
     }
 
     pub fn save(&self) {
@@ -113,5 +127,21 @@ impl Settings {
         } else {
             self.full_size
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shrunken_sizes_are_reset_but_sensible_ones_kept() {
+        let mut s = Settings { full_size: [410.0, 307.0], minimal_size: [460.0, 740.0], ..Default::default() };
+        s.sanitize();
+        assert_eq!(s.full_size, DEFAULT_FULL_SIZE);
+        assert_eq!(s.minimal_size, [460.0, 740.0]);
+        let mut s = Settings { full_size: [900.0, 700.0], ..Default::default() };
+        s.sanitize();
+        assert_eq!(s.full_size, [900.0, 700.0]);
     }
 }

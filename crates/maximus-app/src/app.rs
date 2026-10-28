@@ -490,11 +490,13 @@ impl MaximusApp {
         if (zoom - self.settings.ui_scale).abs() > 0.001 && !self.settings_open {
             self.settings.ui_scale = zoom;
             self.settings.save();
+            self.resize_hold_until = now + 0.6;
         }
         if self.settings.minimal != self.last_mode {
             self.last_mode = self.settings.minimal;
+            // Sizes are stored in logical pixels; egui sizes are in points, which the UI scale stretches.
             let [w, h] = self.settings.size_for_mode();
-            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, h)));
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w / zoom, h / zoom)));
             self.resize_hold_until = now + 0.8;
             self.settings.save();
             return;
@@ -503,7 +505,7 @@ impl MaximusApp {
             return;
         }
         if let Some(r) = ctx.input(|i| i.viewport().inner_rect) {
-            let size = [r.width().round(), r.height().round()];
+            let size = [(r.width() * zoom).round(), (r.height() * zoom).round()];
             let slot = if self.settings.minimal { &mut self.settings.minimal_size } else { &mut self.settings.full_size };
             if (slot[0] - size[0]).abs() >= 1.0 || (slot[1] - size[1]).abs() >= 1.0 {
                 *slot = size;
@@ -1108,6 +1110,7 @@ impl MaximusApp {
             let scale = ui.add(egui::Slider::new(&mut self.settings.ui_scale, 0.7..=2.0).text("UI scale").step_by(0.05));
             if scale.drag_stopped() || (scale.changed() && !scale.dragged()) {
                 ctx.set_zoom_factor(self.settings.ui_scale);
+                self.resize_hold_until = ctx.input(|i| i.time) + 0.6;
                 changed = true;
             }
             changed |= ui.add(egui::Slider::new(&mut self.settings.math_size, 12.0..=40.0).text("Math size")).changed();
