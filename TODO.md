@@ -1,6 +1,11 @@
 - Clean up minimal mode
 - Get a WASM build going
-- Get windows going
+- Get windows/mac going
 - Test test test
 - Make an icon
 - Redo the readme in a human way
+- MCP Flesh out
+- Plugin flesh out
+- Move to CAS agnostic architecture (sagemath, xcas, etc.)
+- Look into packaging w maxima on win/mac
+- Flatpak/Appimage/deb/rpm packages for Linux
