@@ -716,6 +716,23 @@ impl EditorState {
     pub fn move_vertical(&mut self, marks: &[Mark], dir: i32) {
         let Some(i) = Self::mark_index(marks, &self.cur) else { return };
         let here = &marks[i];
+        // A fraction's outer baseline lies between its slots; don't land there
+        // when moving directly between the numerator and denominator.
+        for depth in (0..self.cur.path.len()).rev() {
+            let (idx, slot) = self.cur.path[depth];
+            let mut target = self.cur.path[..depth].to_vec();
+            if matches!(row_at(&mut self.row, &target).and_then(|row| row.get(idx)), Some(Item::Frac(..)))
+                && ((slot == 0 && dir > 0) || (slot == 1 && dir < 0))
+            {
+                target.push((idx, 1 - slot));
+                if let Some(mark) = marks.iter().filter(|m| m.path == target).min_by(|a, b| {
+                    (a.x - here.x).abs().total_cmp(&(b.x - here.x).abs())
+                }) {
+                    self.set_from_mark(mark);
+                    return;
+                }
+            }
+        }
         let cy = (here.y0 + here.y1) / 2.0;
         let mut best: Option<(f32, &Mark)> = None;
         for m in marks {

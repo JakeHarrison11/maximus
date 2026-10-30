@@ -24,16 +24,18 @@ pub struct EditorStyle {
     pub min_height: f32,
     /// Selectable but not editable (used for results).
     pub read_only: bool,
+    /// Keep focus on outside clicks, while still allowing another editor to take it.
+    pub keep_focus: bool,
 }
 
 impl EditorStyle {
     /// A copy with a different hint text.
     pub fn clone_with_hint(&self, hint: &str) -> EditorStyle {
-        EditorStyle { size: self.size, color: self.color, hint: hint.to_string(), min_height: self.min_height, read_only: self.read_only }
+        EditorStyle { size: self.size, color: self.color, hint: hint.to_string(), min_height: self.min_height, read_only: self.read_only, keep_focus: self.keep_focus }
     }
 
     pub fn new(size: f32, color: Color32) -> Self {
-        EditorStyle { size, color, hint: String::new(), min_height: 0.0, read_only: false }
+        EditorStyle { size, color, hint: String::new(), min_height: 0.0, read_only: false, keep_focus: false }
     }
 }
 
@@ -56,7 +58,12 @@ pub fn math_editor(ui: &mut egui::Ui, id: Id, state: &mut EditorState, style: &E
     let pad = if ro { 2.0 } else { pad };
     let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), Sense::hover());
     let rect_id = id;
+    let surrender_focus_on = ctx.options(|o| o.input_options.surrender_focus_on);
+    if style.keep_focus && !ro {
+        ctx.options_mut(|o| o.input_options.surrender_focus_on = egui::SurrenderFocusOn::Never);
+    }
     let resp = ui.interact(rect, rect_id, Sense::click_and_drag());
+    ctx.options_mut(|o| o.input_options.surrender_focus_on = surrender_focus_on);
 
     let mut changed = false;
     let mut submit = false;
@@ -346,6 +353,52 @@ mod tests {
         assert_eq!(st.latex(), "\\frac{1}{2}+x^{}");
         frame(&ctx, &mut st, id, vec![key(Key::Backspace)]);
         assert_eq!(st.latex(), "\\frac{1}{2}+x");
+    }
+
+    #[test]
+    fn sticky_focus_survives_outside_clicks_without_changing_other_editors() {
+        let ctx = Context::default();
+        crate::install_fonts(&ctx);
+        let id = Id::unique("calculator");
+        let other_id = Id::unique("other-editor");
+        let mut state = EditorState::default();
+        let mut other = EditorState::default();
+        let mut other_rect = Rect::NOTHING;
+        let run = |state: &mut EditorState, other: &mut EditorState, other_rect: &mut Rect, events, sticky| {
+            let mut input = RawInput::default();
+            input.screen_rect = Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0)));
+            input.events = events;
+            let mut output = ctx.run_ui(input, |ui| {
+                let mut style = EditorStyle::new(20.0, Color32::WHITE);
+                style.keep_focus = sticky;
+                math_editor(ui, id, state, &style);
+                *other_rect = math_editor(ui, other_id, other, &EditorStyle::new(20.0, Color32::WHITE)).response.rect;
+            });
+            output.textures_delta.clear();
+        };
+        let click = |pos, pressed| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        run(&mut state, &mut other, &mut other_rect, vec![], true);
+        ctx.memory_mut(|m| m.request_focus(id));
+        let outside = Pos2::new(100.0, 400.0);
+        run(&mut state, &mut other, &mut other_rect, vec![Event::PointerMoved(outside), click(outside, true)], true);
+        run(&mut state, &mut other, &mut other_rect, vec![click(outside, false)], true);
+        assert!(ctx.memory(|m| m.has_focus(id)));
+        assert_eq!(ctx.options(|o| o.input_options.surrender_focus_on), egui::SurrenderFocusOn::default());
+        run(&mut state, &mut other, &mut other_rect, vec![Event::Text("2".into())], true);
+        assert_eq!(state.latex(), "2");
+
+        let pos = other_rect.center();
+        run(&mut state, &mut other, &mut other_rect, vec![Event::PointerMoved(pos), click(pos, true)], true);
+        run(&mut state, &mut other, &mut other_rect, vec![click(pos, false)], true);
+        assert!(ctx.memory(|m| m.has_focus(other_id)), "explicit focus changes must still work");
+        run(&mut state, &mut other, &mut other_rect, vec![Event::Text("3".into())], true);
+        assert_eq!(other.latex(), "3");
+        assert_eq!(state.latex(), "2");
+
+        ctx.memory_mut(|m| m.request_focus(id));
+        run(&mut state, &mut other, &mut other_rect, vec![Event::PointerMoved(outside), click(outside, true)], false);
+        run(&mut state, &mut other, &mut other_rect, vec![click(outside, false)], false);
+        assert!(!ctx.memory(|m| m.has_focus(id)), "notebook editors retain normal outside-click behavior");
     }
 
     #[test]

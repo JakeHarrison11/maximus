@@ -908,21 +908,21 @@ impl MaximusApp {
                 }
             }
             ui.separator();
-            if ui.button("Minimal mode").on_hover_text("Ctrl+M").clicked() {
-                self.settings.minimal = true;
-                self.settings.save();
-            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let (icon, tip) = if self.settings.side_panel { (Icon::ChevronRight, "Hide sidebar") } else { (Icon::ChevronLeft, "Show sidebar") };
                 if icons::icon_button(ui, icon, egui::vec2(24.0, 22.0), true).on_hover_text(tip).clicked() {
                     self.settings.side_panel = !self.settings.side_panel;
                     self.settings.save();
                 }
+                if icons::icon_button(ui, Icon::Calculator, egui::vec2(28.0, 24.0), true).on_hover_text("Calculator mode (Ctrl+M)").clicked() {
+                    self.settings.minimal = true;
+                    self.settings.save();
+                }
             });
         });
     }
 
-    fn status_bar(&mut self, ui: &mut egui::Ui) {
+    pub(crate) fn status_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             match self.session.backend.status() {
                 BackendStatus::Ready => {
@@ -967,6 +967,8 @@ impl MaximusApp {
             ui.heading("Maximus");
             ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
             ui.label("A textbook-style notebook frontend for the Maxima computer algebra system.");
+            ui.hyperlink_to("Mode icons: Font Awesome Free 6.7.2, © 2024 Fonticons, Inc.", "https://fontawesome.com");
+            ui.hyperlink_to("CC BY 4.0 (SVG fill adapted for theme tinting)", "https://creativecommons.org/licenses/by/4.0/");
             ui.separator();
             ui.label("Shortcuts");
             ui.label("Enter – evaluate cell (textbook input)   Shift+Enter – evaluate (Maxima input)");
@@ -1227,13 +1229,13 @@ impl eframe::App for MaximusApp {
             }
         }
 
-        egui::Panel::top("menu").show(ui, |ui| {
-            self.menu_bar(ui);
-            if !self.settings.minimal {
+        if !self.settings.minimal {
+            egui::Panel::top("menu").show(ui, |ui| {
+                self.menu_bar(ui);
                 self.toolbar(ui);
-            }
-        });
-        egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
+            });
+            egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
+        }
         let mut splitter: Option<(egui::Rect, f32)> = None;
         if self.settings.minimal {
             egui::CentralPanel::default().show(ui, |ui| self.minimal_ui(ui));

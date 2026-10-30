@@ -1,5 +1,4 @@
-//! Icons drawn with shapes instead of font glyphs, so they are centred exactly
-//! regardless of which fallback font would have supplied the glyph.
+//! Font Awesome mode icons and shape-drawn controls, independent of fallback fonts.
 
 use eframe::egui;
 use egui::{Color32, Pos2, Rect, Response, Sense, Shape, Stroke, StrokeKind, Ui, Vec2};
@@ -15,6 +14,8 @@ pub enum Icon {
     Backspace,
     ChevronRight,
     ChevronLeft,
+    Calculator,
+    Notebook,
 }
 
 pub fn draw_icon(ui: &Ui, icon: Icon, center: Pos2, size: f32, color: Color32) {
@@ -22,6 +23,14 @@ pub fn draw_icon(ui: &Ui, icon: Icon, center: Pos2, size: f32, color: Color32) {
     let s = size * 0.5;
     let stroke = Stroke::new((size * 0.14).max(1.3), color);
     match icon {
+        Icon::Calculator | Icon::Notebook => {
+            let (source, dimensions) = if icon == Icon::Calculator {
+                (egui::include_image!("../assets/fontawesome/calculator.svg"), Vec2::new(size * 0.75, size))
+            } else {
+                (egui::include_image!("../assets/fontawesome/book-open.svg"), Vec2::new(size, size * 512.0 / 576.0))
+            };
+            egui::Image::new(source).tint(color).paint_at(ui, Rect::from_center_size(center, dimensions));
+        }
         Icon::Play => {
             let pts = vec![
                 Pos2::new(center.x - 0.55 * s, center.y - 0.8 * s),
@@ -142,4 +151,25 @@ pub fn status_dot(ui: &mut Ui, color: Color32, text: &str) {
         ui.painter().circle_filled(rect.center(), 4.0, color);
         ui.colored_label(color, text);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn fontawesome_icons_rasterize_as_tintable_masks() {
+        for bytes in [
+            include_bytes!("../assets/fontawesome/calculator.svg").as_slice(),
+            include_bytes!("../assets/fontawesome/book-open.svg").as_slice(),
+        ] {
+            let image = egui_extras::image::load_svg_bytes_with_size(
+                bytes,
+                eframe::egui::load::SizeHint::Size { width: 24, height: 24, maintain_aspect_ratio: true },
+                &Default::default(),
+            ).unwrap();
+            assert!(image.size[0] <= 24 && image.size[1] <= 24);
+            assert!(image.pixels.iter().any(|pixel| *pixel == eframe::egui::Color32::WHITE));
+            assert!(image.pixels.iter().any(|pixel| pixel.a() == 0));
+            assert!(image.pixels.iter().all(|pixel| pixel.r() == pixel.a() && pixel.g() == pixel.a() && pixel.b() == pixel.a()));
+        }
+    }
 }

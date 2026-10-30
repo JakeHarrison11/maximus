@@ -11,7 +11,8 @@ A textbook-style notebook frontend for the [Maxima](https://maxima.sourceforge.i
 - **Symbol palette** – Greek letters, operators and structures, plus palettes from plugins.
 - **Variables panel** – view, edit, delete and reset all user variables and functions.
 - **Plotting** – `plot2d` and `plot3d` are sampled in Maxima and drawn with `egui_plot`; gnuplot can be selected in Settings.
-- **Minimal mode** – a calculator-like view with a keypad (`Ctrl+M`, or `--minimal`). The full CAS stays available.
+- **Minimal mode** – a touch-friendly calculator (`Ctrl+M`, the calculator/notebook icons, or `--minimal`). Large keys, tap-open trigonometry, math, calculus and variable menus, and left/right cursor arrows support textbook input without a physical keyboard. Variable labels use the editor's Latin Modern math rendering. Quick keys include **×10ˣ** (multiply by ten to a power, then enter the exponent), **π**, **x²**, and **!**. Trigonometric functions use radians. **≈**, directly above **=**, evaluates the input as a decimal, or converts the latest result when the input is empty; **÷** inserts a textbook fraction and **Ans** reuses the last answer. Click a history input to edit it again. The options menu can hide the keypad or clear history (Maxima variables are kept). On short windows the keypad scrolls, leaving the input and history accessible. The full CAS stays available.
+  Minimal mode hides the menu bar and footer, keeping only a compact maximus heading with options and notebook controls. Empty history and input are left blank. Session status, messages, and Stop/Restart controls are available in its options menu. Clicking or tapping outside a Trig/Math/Calc/Vars menu only dismisses it, without activating controls underneath.
 - **MCP server** – `maximus --mcp` speaks the Model Context Protocol over stdio (tools: `evaluate`, `latex_to_maxima`, `maxima_to_latex`, `list_variables`, `reset`, `help`, `search_help`, `plot`, `notebook_*`).
 - **Plugins** – folders with a `plugin.toml` in `~/.config/maximus/plugins` (or `$MAXIMUS_PLUGIN_DIR`) can load Maxima files and add menu entries, symbol palettes and snippets. See [examples/plugins/physics](examples/plugins/physics).
 - **WASM-ready architecture** – `maximus-math`, `maximus-core`, `maximus-render`, `maximus-plot` and `maximus-help` build for `wasm32-unknown-unknown`; the GUI crate does too. Maxima runs behind the `Backend` trait, so the browser build needs a remote or WASM-compiled Maxima backend (not yet implemented; the web build starts with a "no backend" notice).
@@ -46,3 +47,12 @@ Contributors and coding agents: see [AGENTS.md](AGENTS.md) for architecture, wor
 | `maximus-app` | the egui application (`maximus` binary) |
 
 Web build (untested with trunk): `trunk serve crates/maximus-app/web/index.html`.
+
+## Icon credits
+
+The calculator and notebook mode buttons use the **calculator** and **book-open**
+icons from [Font Awesome Free 6.7.2](https://github.com/FortAwesome/Font-Awesome/tree/6.7.2),
+copyright 2024 Fonticons, Inc., under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+The bundled SVGs have their fill changed to white for theme-aware tinting; their
+shapes are unchanged. See the [upstream license](crates/maximus-app/assets/fontawesome/LICENSE.txt).
+Icons are embedded locally and require no network connection.
