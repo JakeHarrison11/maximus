@@ -15,10 +15,14 @@ pub enum SideTab {
     Functions,
 }
 
+#[cfg(any(test, not(target_arch = "wasm32")))]
 pub const DEFAULT_FULL_SIZE: [f32; 2] = [1180.0, 800.0];
+#[cfg(any(test, not(target_arch = "wasm32")))]
 pub const DEFAULT_MINIMAL_SIZE: [f32; 2] = [460.0, 740.0];
 /// Smallest window in which each mode stays usable, in points (logical pixels at 100% UI scale).
+#[cfg(any(test, not(target_arch = "wasm32")))]
 pub const MIN_FULL_SIZE: [f32; 2] = [640.0, 440.0];
+#[cfg(any(test, not(target_arch = "wasm32")))]
 pub const MIN_MINIMAL_SIZE: [f32; 2] = [400.0, 500.0];
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -93,10 +97,18 @@ pub fn plugin_dir() -> Option<PathBuf> {
 
 impl Settings {
     pub fn load() -> Settings {
+        #[cfg(not(target_arch = "wasm32"))]
         let mut s: Settings = config_dir()
             .and_then(|d| std::fs::read_to_string(d.join("settings.json")).ok())
             .and_then(|t| serde_json::from_str(&t).ok())
             .unwrap_or_default();
+        #[cfg(target_arch = "wasm32")]
+        let mut s: Settings = match crate::web_platform::Platform::read_settings() {
+            Ok(Some(settings)) => settings,
+            Ok(None) | Err(_) => Settings::default(),
+        };
+        #[cfg(target_arch = "wasm32")]
+        { s.plot_backend = PlotBackend::Egui; }
         s.sanitize();
         s
     }
@@ -108,6 +120,12 @@ impl Settings {
     }
 
     pub fn save(&self) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            // The platform reports failures to the UI event queue and console.
+            let _ = crate::web_platform::Platform::write_settings(self);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
         if let Some(d) = config_dir() {
             let _ = std::fs::create_dir_all(&d);
             let _ = std::fs::write(d.join("settings.json"), serde_json::to_string_pretty(self).unwrap_or_default());
@@ -116,18 +134,21 @@ impl Settings {
 }
 
 /// Minimum window size in logical pixels; a larger UI scale needs a proportionally larger window.
+#[cfg(any(test, not(target_arch = "wasm32")))]
 pub fn min_size(minimal: bool, ui_scale: f32) -> [f32; 2] {
     let base = if minimal { MIN_MINIMAL_SIZE } else { MIN_FULL_SIZE };
     [(base[0] * ui_scale).ceil(), (base[1] * ui_scale).ceil()]
 }
 
 /// Raises a window size to the minimum for the mode and UI scale.
+#[cfg(any(test, not(target_arch = "wasm32")))]
 pub fn clamp_size(size: [f32; 2], minimal: bool, ui_scale: f32) -> [f32; 2] {
     let min = min_size(minimal, ui_scale);
     [size[0].max(min[0]), size[1].max(min[1])]
 }
 
 /// Window size the app starts with in each mode (logical pixels).
+#[cfg(any(test, not(target_arch = "wasm32")))]
 pub fn default_size(minimal: bool, ui_scale: f32) -> [f32; 2] {
     clamp_size(if minimal { DEFAULT_MINIMAL_SIZE } else { DEFAULT_FULL_SIZE }, minimal, ui_scale)
 }

@@ -4,10 +4,41 @@
     <meta charset="utf-8" />
     <title>Maximus</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <style>html, body { margin: 0; height: 100%; background: #1b1b1b; } canvas { width: 100%; height: 100%; display: block; }</style>
+    <style>
+      html, body { margin: 0; height: 100%; background: #1b1b1b; color: #ddd; font-family: sans-serif; }
+      body { display: grid; grid-template-rows: minmax(0, 1fr) auto; overflow: hidden; }
+      canvas { width: 100%; height: 100%; min-height: 0; display: block; }
+      #web-status { min-height: 32px; box-sizing: border-box; font-size: 12px; background: #222; padding: 8px 170px 8px 8px; }
+      #startup { position: fixed; top: 20px; left: 20px; }
+    </style>
     <link data-trunk rel="rust" data-bin="maximus" href="../Cargo.toml" />
+    <link data-trunk rel="copy-dir" href="runtime" />
+    <link data-trunk rel="copy-file" href="maxima-worker.js" />
+    <link data-trunk rel="copy-file" href="packages.js" />
+    <link data-trunk rel="copy-file" href="packages-ui.js" />
+    <link data-trunk rel="copy-file" href="service-worker.js" />
   </head>
   <body>
     <canvas id="maximus_canvas"></canvas>
+    <div id="startup">Loading Maximus and local Maxima runtime...</div>
+    <div id="web-status">First visit needs a connection. Preparing offline assets...</div>
+    <script type="module" src="./packages-ui.js"></script>
+    <script>
+      window.addEventListener("error", event => {
+        document.getElementById("web-status").textContent = `Application error: ${event.message}`;
+      });
+      window.addEventListener("unhandledrejection", event => {
+        document.getElementById("web-status").textContent = `Application error: ${event.reason}`;
+      });
+      if ("serviceWorker" in navigator) {
+        navigator.serviceWorker.addEventListener("message", event => {
+          if (event.data.message) document.getElementById("web-status").textContent = event.data.message;
+        });
+        window.addEventListener("load", () => navigator.serviceWorker.register("./service-worker.js")
+          .catch(error => { document.getElementById("web-status").textContent = `Offline setup failed: ${error.message}`; }));
+      } else {
+        document.getElementById("web-status").textContent = "Offline reload unavailable: service workers need HTTPS or localhost.";
+      }
+    </script>
   </body>
 </html>

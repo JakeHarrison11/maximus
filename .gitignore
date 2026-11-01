@@ -1,3 +1,6 @@
 target/
 *.png
 temp/*
+dist/
+crates/maximus-app/web/runtime/
+node_modules/

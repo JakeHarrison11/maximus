@@ -88,7 +88,7 @@ impl Session {
                 self.last_error = Some(m);
             }
             BackendStatus::Ready => self.ready = true,
-            BackendStatus::Starting => {}
+            BackendStatus::Starting => self.ready = false,
         }
     }
 
@@ -185,8 +185,11 @@ impl Session {
             self.fail_job(job, "Maxima was restarted");
         }
         self.cancel_queued_cells();
-        self.queue.clear();
+        while let Some(job) = self.queue.pop_front() {
+            self.fail_job(job, "Maxima was restarted");
+        }
         self.variables.clear();
+        self.user_names.clear();
         self.last_error = None;
         self.sync_status();
     }
@@ -232,7 +235,15 @@ impl Session {
             changed = true;
             self.handle_event(ev);
         }
-        while self.inflight.is_none() {
+        if !self.ready {
+            if let BackendStatus::Dead(message) = self.backend.status() {
+                while let Some(job) = self.queue.pop_front() {
+                    self.fail_job(job, &message);
+                    changed = true;
+                }
+            }
+        }
+        while self.inflight.is_none() && self.ready {
             let Some(job) = self.queue.pop_front() else { break };
             changed = true;
             self.dispatch(job);
@@ -295,6 +306,9 @@ impl Session {
                     self.fail_job(job, &msg);
                 }
                 self.cancel_queued_cells();
+                while let Some(job) = self.queue.pop_front() {
+                    self.fail_job(job, &msg);
+                }
             }
             kind => {
                 let Some((rid, job)) = self.inflight.clone() else { return };
@@ -536,6 +550,42 @@ mod tests {
         }
         fn interrupt(&mut self) {}
         fn restart(&mut self) {}
+    }
+
+    #[test]
+    fn waits_for_ready_before_dispatching() {
+        let mut session = Session::new(Box::new(Echo { pending: vec![] }));
+        session.ready = false;
+        let token = session.submit_raw("a:1$");
+        session.tick();
+        assert!(session.inflight.is_none());
+        session.handle_event(Event { id: 0, kind: EventKind::Ready });
+        session.tick();
+        session.tick();
+        assert!(session.take_raw(token).unwrap().ok);
+    }
+
+    #[test]
+    fn restart_finishes_raw_requests_and_discards_names() {
+        let mut session = Session::new(Box::new(Echo { pending: vec![] }));
+        let first = session.submit_raw("f(x):=x$");
+        session.tick();
+        let queued = session.submit_raw("b:2$");
+        assert!(session.user_names.contains("f"));
+        session.restart();
+        assert!(session.take_raw(first).unwrap().error().is_some());
+        assert!(session.take_raw(queued).unwrap().error().is_some());
+        assert!(session.user_names.is_empty());
+        assert!(!session.is_busy());
+    }
+
+    #[test]
+    fn unavailable_backend_fails_jobs_without_hanging() {
+        let mut session = Session::new(Box::new(NullBackend::new("unavailable")));
+        let token = session.submit_raw("1+1;");
+        session.tick();
+        assert_eq!(session.take_raw(token).unwrap().error(), Some("unavailable"));
+        assert!(!session.is_busy());
     }
 
     #[test]

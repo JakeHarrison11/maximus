@@ -44,54 +44,9 @@ fn escape(s: &str) -> String {
     o
 }
 
-fn unescape(s: &str) -> String {
-    let mut o = String::with_capacity(s.len());
-    let mut it = s.chars();
-    while let Some(c) = it.next() {
-        if c == '\\' {
-            match it.next() {
-                Some('n') => o.push('\n'),
-                Some('r') => o.push('\r'),
-                Some('t') => o.push('\t'),
-                Some(c) => o.push(c),
-                None => o.push('\\'),
-            }
-        } else {
-            o.push(c);
-        }
-    }
-    o
-}
-
 /// Parses one driver frame; returns `None` for lines that are not frames.
 pub fn parse_frame(line: &str) -> Option<Event> {
-    let rest = line.strip_prefix("@@MX\t")?;
-    let mut parts = rest.split('\t');
-    let id: RequestId = parts.next()?.parse().ok()?;
-    let kind = parts.next()?;
-    let args: Vec<String> = parts.map(unescape).collect();
-    let kind = match kind {
-        "ready" => EventKind::Ready,
-        "out" => EventKind::Out(args.first().cloned().unwrap_or_default()),
-        "plot" => EventKind::Plot(args.first().cloned().unwrap_or_default()),
-        "error" => EventKind::Error(args.first().cloned().unwrap_or_default()),
-        "done" => EventKind::Done { ok: args.first().map_or(true, |a| a == "ok") },
-        "result" => {
-            let g = |i: usize| args.get(i).cloned().unwrap_or_default();
-            EventKind::Result(ResultItem { label: g(0), shown: g(1) == "1", tex: g(2), text: g(3) })
-        }
-        "vars" => {
-            let mut v = Vec::new();
-            for c in args.chunks(3) {
-                if c.len() == 3 {
-                    v.push(VarInfo { name: c[1].clone(), value: c[2].clone(), is_function: c[0] == "f" });
-                }
-            }
-            EventKind::Vars(v)
-        }
-        _ => return None,
-    };
-    Some(Event { id, kind })
+    maximus_core::protocol::parse_frame(line).ok()
 }
 
 impl NativeBackend {

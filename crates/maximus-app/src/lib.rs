@@ -7,6 +7,8 @@ mod icons;
 mod minimal;
 mod settings;
 mod side;
+#[cfg(target_arch = "wasm32")]
+mod web_platform;
 
 pub use app::{MaximusApp, Options};
 
@@ -60,7 +62,62 @@ pub async fn start(canvas_id: String) -> Result<(), wasm_bindgen::JsValue> {
         .ok_or("canvas not found")?
         .dyn_into::<web_sys::HtmlCanvasElement>()
         .map_err(|_| "element is not a canvas")?;
+    let platform_ready = web_platform::initialize().await;
+    let recovery = if platform_ready.is_ok() { web_platform::load_notebook().await } else {
+        Err("Browser storage initialization failed; autosave is disabled".into())
+    };
+    let help = load_web_help().await;
     eframe::WebRunner::new()
-        .start(canvas, eframe::WebOptions::default(), Box::new(|cc| Ok(Box::new(MaximusApp::new(cc, Options::default())))))
-        .await
+        .start(canvas, eframe::WebOptions::default(), Box::new(move |cc| {
+            let mut app = MaximusApp::new(cc, Options::default());
+            match recovery {
+                Ok(Some(notebook)) => {
+                    app.session.notebook = notebook;
+                    app.session.notebook.clear_outputs();
+                    app.last_saved_json = app.session.notebook.to_json();
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    app.web_autosave = false;
+                    app.messages.push(format!("Could not restore notebook: {error}"));
+                }
+            }
+            if let Err(error) = platform_ready { app.messages.push(error); }
+            match help {
+                Ok(help) => {
+                    maximus_math::words::register_functions(help.entries.iter().filter(|e| e.is_function()).map(|e| e.name.clone()));
+                    app.manual_cats = help.categories().into_iter()
+                        .map(|(category, entries)| (category, entries.iter().map(|e| (e.name.clone(), e.signatures.first().cloned())).collect()))
+                        .collect();
+                    app.help = help;
+                }
+                Err(error) => app.messages.push(error),
+            }
+            Ok(Box::new(app))
+        }))
+        .await?;
+    if let Some(startup) = document.get_element_by_id("startup") {
+        startup.remove();
+    }
+    Ok(())
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn load_web_help() -> Result<maximus_help::HelpIndex, String> {
+    use wasm_bindgen::JsCast;
+    let window = web_sys::window().ok_or("Browser window unavailable")?;
+    let response = wasm_bindgen_futures::JsFuture::from(window.fetch_with_str("runtime/help.info"))
+        .await.map_err(|e| format!("Could not load offline help: {e:?}"))?
+        .dyn_into::<web_sys::Response>().map_err(|_| "Invalid help response")?;
+    if !response.ok() {
+        return Err(format!("Help download failed: HTTP {}", response.status()));
+    }
+    let text = wasm_bindgen_futures::JsFuture::from(response.text().map_err(|e| format!("Could not read help: {e:?}"))?)
+        .await.map_err(|e| format!("Could not decode help: {e:?}"))?
+        .as_string().ok_or("Help is not text")?;
+    let help = maximus_help::HelpIndex::from_info(&text);
+    if help.entries.is_empty() {
+        return Err("The bundled Maxima help index is empty".into());
+    }
+    Ok(help)
 }

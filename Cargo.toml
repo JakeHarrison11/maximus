@@ -4,6 +4,7 @@ members = [
     "crates/maximus-core",
     "crates/maximus-math",
     "crates/maximus-backend-native",
+    "crates/maximus-backend-web",
     "crates/maximus-help",
     "crates/maximus-render",
     "crates/maximus-plot",

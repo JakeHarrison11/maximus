@@ -23,6 +23,7 @@ Before finishing any change: `cargo test --workspace` and the WASM check must pa
 | `maximus-math` | The math model and all conversions. `tree.rs`: `Item`/`Row` textbook tree, `from_latex`, `row_to_latex`. `semantic.rs`: `parse_tree`/`tree_to_maxima` (tree → Maxima). `maxima_parse.rs` + `expr.rs`: Maxima text → `Expr` → tree (`maxima_to_tree`, `split_statements`, `maxima_script_to_tree/latex`). `words.rs`: function-name registry; names shorter than 4 letters count as functions only when followed by `(`. |
 | `maximus-core` | `Notebook`/`Cell` (JSON `.maximus` files), the `Backend` trait, `Session` (evaluation queue, buffered output, variable tracking via `user_names`/`defined_names`), `PlotData`, plugin manifests. No GUI and no process code, so it builds for WASM. |
 | `maximus-backend-native` | Spawns Maxima (`--preload-lisp=driver.lisp -r ':lisp (maxima::mx-loop)'`) and talks a framed, tab-separated `@@MX` protocol with `driver.lisp`. Each backend gets its own temp driver dir. Plot sampling happens in Lisp and comes back as JSON. |
+| `maximus-backend-web` | WASM worker transport. The Emscripten ECL engine source-loads Maxima, then uses the same native `driver.lisp`; `maximus-core::protocol` decodes frames for both backends. Runtime C/Lisp embedding lives in `runtime/`. |
 | `maximus-help` | Parses the Maxima Info manual into a searchable index (handles the newer indented-signature format) and reflows prose. |
 | `maximus-render` | `layout.rs`: textbook layout engine (boxes, baselines, hand-drawn integral sign). `editor.rs`: `EditorState` (cursor, anchor, selection as `Part::{Items,Open,Close}`, lone brackets, matrix ops). `editor_ui.rs`: the `math_editor` widget and read-only `math_view`. Bundled fonts are in `assets/` (Latin Modern, Liberation Serif Italic, DejaVu). |
 | `maximus-plot` | `show_plot` (egui_plot with hover snapping, coordinates, zoom buttons), critical-point detection, optional gnuplot renderer. |
@@ -49,6 +50,10 @@ Other files: `examples/demo.maximus` (guided tour; a test evaluates every cell, 
 ## Settings and files
 
 Settings live in `<config dir>/maximus/settings.json` (`dirs::config_dir`, so `$XDG_CONFIG_HOME` is honoured; use a temp `XDG_CONFIG_HOME` when testing). Window size and maximized state are deliberately **not** persisted: the app starts at `settings::default_size` for the mode, and `manage_window` in `app.rs` only remembers each mode's size in memory so that switching back from minimal to full restores the previous size. Sizes are in **logical pixels**; egui reports **points** (logical pixels divided by the UI scale), so convert with `ctx.zoom_factor()`. Minimum window sizes are defined in points and scaled by UI scale (`settings::min_size`). On Wayland egui never reports `viewport().inner_rect`, so the code falls back to `ctx.viewport_rect()`. Do not send a redundant `ViewportCommand::Maximized` together with `InnerSize`: on Wayland it cancels the resize.
+
+Browser platform services are in `web_platform.rs` and `web/platform.js`: settings use localStorage; notebook recovery and uploaded plugin/workspace files use IndexedDB. Initialization and recovery precede app construction. Only acknowledge the exact autosave snapshot that finished writing. Browser Stop replaces the worker/session and clears outputs, never persisted files; recovery/open also clear outputs because CAS state is fresh. Optional package groups are explicitly installed through `packages.js` into a separate IndexedDB database and mounted before each worker request.
+
+Build the browser bundle with `scripts/build-web.sh` (or `--skip-runtime` after Rust/JS-only changes); see the README for pinned ECL/SDK preparation. Run Trunk from `crates/maximus-app`, not the virtual workspace root. Runtime assets and `dist/` are generated and ignored. `scripts/test-web.mjs` exercises the real canvas and worker in Chromium, including offline reload. Keep `web/index.html` copy directives and the generated asset manifest in sync when adding JS modules. Do not rely on shared memory or cross-origin isolation headers.
 
 ## Testing and visual checks
 
@@ -77,6 +82,6 @@ Settings live in `<config dir>/maximus/settings.json` (`dirs::config_dir`, so `$
 
 ## Known gaps
 
-- The browser build has no Maxima backend yet (needs a remote or WASM-compiled Maxima behind the `Backend` trait).
+- The browser Maxima engine is source-loaded ECL bytecode, so startup/calculation speed differs from native. Native-code, OS-process/socket and interactive-terminal packages are not portable. Optional source packages must be explicitly installed before loading.
 - The rfd file dialogs and the clipboard paste path have only been exercised in limited environments (Xvfb, no real desktop portal).
 - Plugins are intentionally lightweight (manifest, Maxima files, menu items, palettes, snippets); there is no native code loading.

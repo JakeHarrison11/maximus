@@ -1397,7 +1397,9 @@ dependencies = [
  "eframe",
  "egui_extras",
  "egui_plot",
+ "js-sys",
  "maximus-backend-native",
+ "maximus-backend-web",
  "maximus-core",
  "maximus-help",
  "maximus-math",
@@ -1418,6 +1420,16 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "maximus-core",
+]
+
+[[package]]
+name = "maximus-backend-web"
+version = "0.1.0"
+dependencies = [
+ "maximus-core",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
 ]
 
 [[package]]

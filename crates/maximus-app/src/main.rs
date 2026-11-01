@@ -21,6 +21,9 @@ fn main() {
     wasm_bindgen_futures::spawn_local(async {
         if let Err(e) = maximus_app::start("maximus_canvas".to_string()).await {
             web_sys::console::error_1(&e);
+            if let Some(startup) = web_sys::window().and_then(|w| w.document()).and_then(|d| d.get_element_by_id("startup")) {
+                startup.set_text_content(Some(&format!("Could not start Maximus: {e:?}")));
+            }
         }
     });
 }

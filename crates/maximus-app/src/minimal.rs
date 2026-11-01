@@ -29,6 +29,28 @@ fn keypad_menu(response: &egui::Response, content: impl FnOnce(&mut egui::Ui)) {
     }
 }
 
+/// Like `clicked()`, but a keypad key also fires when the pointer moved during the press:
+/// egui turns such presses into drags and drops the click.
+fn tapped(response: &egui::Response) -> bool {
+    let key = egui::Id::unique("calculator-pressed-key");
+    let ctx = &response.ctx;
+    let (pressed, released) = ctx.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_released()));
+    let over = response.contains_pointer() && response.enabled();
+    if pressed {
+        if over {
+            ctx.data_mut(|d| d.insert_temp(key, response.id));
+        } else if ctx.data(|d| d.get_temp::<egui::Id>(key)) == Some(response.id) {
+            ctx.data_mut(|d| d.remove::<egui::Id>(key));
+        }
+    }
+    let mut fired = false;
+    if released && ctx.data(|d| d.get_temp::<egui::Id>(key)) == Some(response.id) {
+        ctx.data_mut(|d| d.remove::<egui::Id>(key));
+        fired = over;
+    }
+    response.clicked() || fired
+}
+
 fn key_width(ui: &egui::Ui, columns: usize) -> f32 {
     ((ui.available_width() - (columns - 1) as f32 * 6.0) / columns as f32).floor()
 }
@@ -270,6 +292,37 @@ mod tests {
     }
 
     #[test]
+    fn keypad_keys_fire_when_the_pointer_moves_during_a_press() {
+        let ctx = editor_context();
+        let mut rect = egui::Rect::NOTHING;
+        let mut taps = 0;
+        let mut frame = |events| {
+            let mut output = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
+                let response = ui.put(egui::Rect::from_min_size(egui::pos2(100.0, 100.0), Vec2::new(80.0, 48.0)), egui::Button::new("7"));
+                rect = response.rect;
+                if tapped(&response) {
+                    taps += 1;
+                }
+            });
+            output.textures_delta.clear();
+            (rect, taps)
+        };
+        let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        let (rect, _) = frame(vec![]);
+        let (start, end) = (rect.left_center() + Vec2::new(5.0, 0.0), rect.right_center() - Vec2::new(5.0, 0.0));
+        frame(vec![egui::Event::PointerMoved(start), button(start, true)]);
+        frame(vec![egui::Event::PointerMoved(end)]);
+        let (_, taps) = frame(vec![button(end, false)]);
+        assert_eq!(taps, 1);
+
+        let outside = rect.right_center() + Vec2::new(40.0, 0.0);
+        frame(vec![egui::Event::PointerMoved(start), button(start, true)]);
+        frame(vec![egui::Event::PointerMoved(outside)]);
+        let (_, taps) = frame(vec![button(outside, false)]);
+        assert_eq!(taps, 1, "releasing off the key must not fire it");
+    }
+
+    #[test]
     fn keypad_targets_fit_the_minimum_window_and_are_touch_sized() {
         for zoom in [1.0, 2.0] {
             let ctx = editor_context();
@@ -394,7 +447,7 @@ impl MaximusApp {
     }
 
     fn key(&mut self, ui: &mut egui::Ui, label: &str, ins: Insert, w: f32) -> bool {
-        let clicked = calculator_button(ui, label, w).clicked();
+        let clicked = tapped(&calculator_button(ui, label, w));
         if clicked {
             self.apply_insert_minimal(ins);
             ui.memory_mut(|m| m.request_focus(egui::Id::unique(INPUT_ID)));
@@ -438,7 +491,7 @@ impl MaximusApp {
                 ui.weak("Angles in radians");
                 egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
                     for name in ["sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh"] {
-                        if calculator_button(ui, name, 196.0).clicked() {
+                        if tapped(&calculator_button(ui, name, 196.0)) {
                             insert_function(&mut self.min_editor, name);
                             ui.memory_mut(|m| m.request_focus(egui::Id::unique(INPUT_ID)));
                             ui.close();
@@ -449,13 +502,13 @@ impl MaximusApp {
             let powers = calculator_button(ui, "Math ▾", menu_w);
             keypad_menu(&powers, |ui| {
                 egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
-                    if calculator_button(ui, "x²  Square", 196.0).clicked() {
+                    if tapped(&calculator_button(ui, "x²  Square", 196.0)) {
                         insert_square(&mut self.min_editor, ui.ctx(), size);
                         ui.memory_mut(|m| m.request_focus(egui::Id::unique(INPUT_ID)));
                         ui.close();
                     }
                     for (label, name) in [("ln  Natural logarithm", "log"), ("exp  Exponential", "exp")] {
-                        if calculator_button(ui, label, 196.0).clicked() {
+                        if tapped(&calculator_button(ui, label, 196.0)) {
                             insert_function(&mut self.min_editor, name);
                             ui.memory_mut(|m| m.request_focus(egui::Id::unique(INPUT_ID)));
                             ui.close();
@@ -494,17 +547,17 @@ impl MaximusApp {
                 ("←", egui::Key::ArrowLeft, "Move left"),
                 ("→", egui::Key::ArrowRight, "Move right / leave a template"),
             ] {
-                if calculator_button(ui, label, nav_w).on_hover_text(tip).clicked() {
+                if tapped(&calculator_button(ui, label, nav_w).on_hover_text(tip)) {
                     navigate(&mut self.min_editor, ui.ctx(), size, key);
                     ui.memory_mut(|m| m.request_focus(egui::Id::unique(INPUT_ID)));
                 }
             }
-            if calculator_button(ui, "×10ˣ", nav_w).on_hover_text("Multiply by a power of ten; enter the exponent next").clicked() {
+            if tapped(&calculator_button(ui, "×10ˣ", nav_w).on_hover_text("Multiply by a power of ten; enter the exponent next")) {
                 insert_scientific_notation(&mut self.min_editor);
                 ui.memory_mut(|m| m.request_focus(egui::Id::unique(INPUT_ID)));
             }
             self.key(ui, "π", Insert::Symbol('π'), nav_w);
-            if calculator_button(ui, "x²", nav_w).on_hover_text("Square the preceding operand or selection").clicked() {
+            if tapped(&calculator_button(ui, "x²", nav_w).on_hover_text("Square the preceding operand or selection")) {
                 insert_square(&mut self.min_editor, ui.ctx(), size);
                 ui.memory_mut(|m| m.request_focus(egui::Id::unique(INPUT_ID)));
             }
@@ -512,11 +565,11 @@ impl MaximusApp {
         });
         let w = key_width(ui, 5);
         egui::Grid::new("calculator-keys").spacing([6.0, 6.0]).show(ui, |ui| {
-            if calculator_button(ui, "C", w).on_hover_text("Clear input (keep history)").clicked() {
+            if tapped(&calculator_button(ui, "C", w).on_hover_text("Clear input (keep history)")) {
                 self.min_editor.clear();
                 ui.memory_mut(|m| m.request_focus(egui::Id::unique(INPUT_ID)));
             }
-            if icons::icon_button(ui, Icon::Backspace, Vec2::new(w, KEY_HEIGHT), true).on_hover_text("Backspace").clicked() {
+            if tapped(&icons::icon_button(ui, Icon::Backspace, Vec2::new(w, KEY_HEIGHT), true).on_hover_text("Backspace")) {
                 self.min_editor.backspace();
                 ui.memory_mut(|m| m.request_focus(egui::Id::unique(INPUT_ID)));
             }
@@ -541,7 +594,7 @@ impl MaximusApp {
                 } else {
                     let can_decimal = self.session.ready && (!self.min_editor.is_empty() || latest_result(&self.session.notebook).is_some());
                     ui.add_enabled_ui(can_decimal, |ui| {
-                        if calculator_button(ui, "≈", w).on_hover_text("Decimal approximation of the input, or of the latest result when empty").clicked() {
+                        if tapped(&calculator_button(ui, "≈", w).on_hover_text("Decimal approximation of the input, or of the latest result when empty")) {
                             self.decimal_minimal();
                             ui.memory_mut(|m| m.request_focus(egui::Id::unique(INPUT_ID)));
                         }
@@ -554,7 +607,7 @@ impl MaximusApp {
             }
             ui.add_enabled_ui(self.session.ready && !self.min_editor.is_empty(), |ui| {
                 let enter = egui::Button::new(RichText::new("=").size(23.0).color(Color32::WHITE)).fill(Color32::from_rgb(0x2e, 0x7d, 0x32));
-                if ui.add_sized(Vec2::new(w, KEY_HEIGHT), enter).on_hover_text("Evaluate (Enter)").clicked() {
+                if tapped(&ui.add_sized(Vec2::new(w, KEY_HEIGHT), enter).on_hover_text("Evaluate (Enter)")) {
                     self.submit_minimal();
                     ui.memory_mut(|m| m.request_focus(egui::Id::unique(INPUT_ID)));
                 }

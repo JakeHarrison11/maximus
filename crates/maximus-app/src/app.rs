@@ -3,10 +3,14 @@
 use crate::catalog::{self, CallTemplate, Category, PaletteGroup};
 use crate::icons::{self, Icon};
 pub use crate::settings::SideTab;
-use crate::settings::{self, PlotBackend, Settings};
+use crate::settings::{self, Settings};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::settings::PlotBackend;
 use eframe::egui;
 use egui::{Color32, Key, Modifiers, RichText};
-use maximus_core::plugin::{load_plugins, LoadedPlugin};
+use maximus_core::plugin::LoadedPlugin;
+#[cfg(not(target_arch = "wasm32"))]
+use maximus_core::plugin::load_plugins;
 use maximus_core::*;
 use maximus_help::HelpIndex;
 use maximus_math::{maxima_to_tree, Row};
@@ -137,6 +141,12 @@ pub struct MaximusApp {
     /// Window size of each mode (full, minimal) while the app runs; used when switching back to a mode.
     pub mode_sizes: [Option<[f32; 2]>; 2],
     pub min_scroll_frames: u32,
+    #[cfg(target_arch = "wasm32")]
+    pub web_platform: crate::web_platform::Platform,
+    #[cfg(target_arch = "wasm32")]
+    pub web_autosave: bool,
+    #[cfg(target_arch = "wasm32")]
+    web_save_pending: Option<String>,
 }
 
 impl MaximusApp {
@@ -154,7 +164,10 @@ impl MaximusApp {
         cc.egui_ctx.set_zoom_factor(settings.ui_scale.clamp(0.5, 3.0));
         cc.egui_ctx.all_styles_mut(|style| style.spacing.item_spacing = egui::vec2(6.0, 6.0));
 
+        #[cfg(not(target_arch = "wasm32"))]
         let help = HelpIndex::load_system();
+        #[cfg(target_arch = "wasm32")]
+        let help = HelpIndex::default();
         maximus_math::words::register_functions(help.entries.iter().filter(|e| e.is_function()).map(|e| e.name.clone()));
         let init_tab = settings.side_tab;
         let last_mode = settings.minimal;
@@ -204,6 +217,12 @@ impl MaximusApp {
             min_applied: None,
             mode_sizes: [None, None],
             min_scroll_frames: 0,
+            #[cfg(target_arch = "wasm32")]
+            web_platform: crate::web_platform::Platform::new(cc.egui_ctx.clone()),
+            #[cfg(target_arch = "wasm32")]
+            web_autosave: true,
+            #[cfg(target_arch = "wasm32")]
+            web_save_pending: None,
         };
         app.manual_cats = app
             .help
@@ -228,6 +247,8 @@ impl MaximusApp {
     pub fn load_plugins(&mut self) {
         self.plugins.clear();
         self.startup_tokens.clear();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
         let dir = std::env::var("MAXIMUS_PLUGIN_DIR").ok().map(PathBuf::from).or_else(settings::plugin_dir);
         if let Some(dir) = dir {
             let (mut loaded, errs) = load_plugins(&dir);
@@ -236,6 +257,17 @@ impl MaximusApp {
                 p.enabled = !self.settings.disabled_plugins.contains(&p.manifest.name);
             }
             self.plugins = loaded;
+        }
+        }
+        #[cfg(target_arch = "wasm32")]
+        match self.web_platform.plugins() {
+            Ok(mut plugins) => {
+                for plugin in &mut plugins {
+                    plugin.enabled = !self.settings.disabled_plugins.contains(&plugin.manifest.name);
+                }
+                self.plugins = plugins;
+            }
+            Err(error) => self.messages.push(format!("Could not load browser plugins: {error}")),
         }
         for p in self.plugins.iter().filter(|p| p.enabled) {
             for code in p.startup_code() {
@@ -252,6 +284,18 @@ impl MaximusApp {
         self.session.notebook = nb;
         self.session.notebook.clear_outputs();
         self.load_plugins();
+    }
+
+    fn stop_backend(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.session.interrupt();
+        #[cfg(target_arch = "wasm32")]
+        {
+            if self.session.is_busy() {
+                self.restart_backend();
+                self.messages.push("Stopped: Maxima state and outputs were reset. Notebook inputs and imported files are kept.".into());
+            }
+        }
     }
 
     // ------------------------------------------------------------ files
@@ -281,6 +325,18 @@ impl MaximusApp {
     }
 
     pub fn save_path(&mut self, p: &std::path::Path) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            match self.web_platform.export_notebook(&p.display().to_string(), &self.session.notebook) {
+                Ok(()) => {
+                    self.current_path = Some(p.to_owned());
+                    self.messages.push(format!("Downloaded {}", p.display()));
+                    self.web_autosave = true;
+                }
+                Err(error) => self.messages.push(format!("Could not download notebook: {error}")),
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
         match std::fs::write(p, self.session.notebook.to_json()) {
             Ok(()) => {
                 self.current_path = Some(p.to_path_buf());
@@ -296,6 +352,11 @@ impl MaximusApp {
             FileKind::ExportLatex => self.session.notebook.to_latex_document(),
             _ => self.session.notebook.to_maxima_script(&self.session.parse_ctx()),
         };
+        #[cfg(target_arch = "wasm32")]
+        if let Err(error) = self.web_platform.export_text(&p.display().to_string(), &text) {
+            self.messages.push(format!("Could not export: {error}"));
+        }
+        #[cfg(not(target_arch = "wasm32"))]
         match std::fs::write(p, text) {
             Ok(()) => {
                 self.remember_dir(p);
@@ -312,6 +373,12 @@ impl MaximusApp {
         self.last_autosave = now;
         let json = self.session.notebook.to_json();
         if json != self.last_saved_json {
+            #[cfg(target_arch = "wasm32")]
+            if self.web_autosave && self.web_save_pending.is_none() {
+                self.web_save_pending = Some(json.clone());
+                self.web_platform.autosave_notebook(&self.session.notebook);
+            }
+            #[cfg(not(target_arch = "wasm32"))]
             if let Some(d) = settings::data_dir() {
                 let _ = std::fs::create_dir_all(&d);
                 if std::fs::write(d.join("autosave.maximus"), &json).is_ok() {
@@ -476,6 +543,11 @@ impl MaximusApp {
     }
 
     fn poll_session(&mut self, ctx: &egui::Context) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.poll_web_platform();
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
         self.session.tick();
         let mut remaining = Vec::new();
         for (name, token) in std::mem::take(&mut self.startup_tokens) {
@@ -507,6 +579,15 @@ impl MaximusApp {
             self.settings.ui_scale = zoom;
             self.settings.save();
         }
+        #[cfg(target_arch = "wasm32")]
+        {
+            if self.last_mode != self.settings.minimal {
+                self.last_mode = self.settings.minimal;
+                self.settings.save();
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
         // Sizes are in logical pixels; egui sizes are in points, which the UI scale stretches.
         if self.min_applied != Some((self.settings.minimal, zoom)) {
             self.min_applied = Some((self.settings.minimal, zoom));
@@ -529,6 +610,7 @@ impl MaximusApp {
             }
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w / zoom, h / zoom)));
             self.settings.save();
+        }
         }
     }
 
@@ -612,7 +694,7 @@ impl MaximusApp {
             self.session.evaluate_all();
         }
         if stop {
-            self.session.interrupt();
+            self.stop_backend();
         }
     }
 
@@ -647,7 +729,11 @@ impl MaximusApp {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            self.file_dialog = Some(FileDialog { kind, path });
+            if kind == FileKind::Open {
+                self.web_platform.open_notebook();
+            } else {
+                self.file_dialog = Some(FileDialog { kind, path });
+            }
         }
     }
 
@@ -689,6 +775,13 @@ impl MaximusApp {
 
     /// Suggested path for the file picker: the current file name inside the last used folder.
     pub fn default_path(&self) -> String {
+        #[cfg(target_arch = "wasm32")]
+        {
+            return self.current_path.as_ref().and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "notebook.maximus".into());
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
         let name = self
             .current_path
             .as_ref()
@@ -699,6 +792,7 @@ impl MaximusApp {
         let current = self.current_path.as_ref().and_then(|p| p.parent()).map(PathBuf::from).filter(|d| d.is_dir());
         let base = last.or(current).or_else(dirs_home).unwrap_or_else(|| PathBuf::from("."));
         base.join(name).display().to_string()
+        }
     }
 
     pub fn save_or_dialog(&mut self) {
@@ -754,6 +848,14 @@ impl MaximusApp {
                     self.settings_open = true;
                     ui.close();
                 }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    if ui.button("Import CAS files...").on_hover_text("Files are mounted in /workspace; importing resets the CAS").clicked() {
+                        self.web_platform.upload_workspace(false);
+                        ui.close();
+                    }
+                }
+                #[cfg(not(target_arch = "wasm32"))]
                 if ui.button("Quit").clicked() {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 }
@@ -780,7 +882,7 @@ impl MaximusApp {
                     ui.close();
                 }
                 if ui.add(egui::Button::new("Interrupt").shortcut_text("Ctrl+.")).clicked() {
-                    self.session.interrupt();
+                    self.stop_backend();
                     ui.close();
                 }
             });
@@ -944,8 +1046,10 @@ impl MaximusApp {
                 ui.separator();
                 ui.spinner();
                 ui.label("Computing…");
-                if ui.small_button("Stop").clicked() {
-                    self.session.interrupt();
+                if ui.small_button("Stop").on_hover_text(if cfg!(target_arch = "wasm32") {
+                    "Stop and reset Maxima state and outputs (inputs and files are kept)"
+                } else { "Interrupt evaluation" }).clicked() {
+                    self.stop_backend();
                 }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1069,12 +1173,12 @@ impl MaximusApp {
             FileKind::ExportMaxima => "Export Maxima script",
         };
         egui::Window::new(title).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
-            ui.label("Path");
+            ui.label(if cfg!(target_arch = "wasm32") { "Download filename" } else { "Path" });
             let r = ui.add(egui::TextEdit::singleline(&mut fd.path).desired_width(440.0));
             if r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
                 go = true;
             }
-            if fd.kind == FileKind::Open {
+            if fd.kind == FileKind::Open && !cfg!(target_arch = "wasm32") {
                 if let Some(dir) = std::path::Path::new(&fd.path).parent() {
                     let mut files: Vec<_> = std::fs::read_dir(dir)
                         .map(|rd| rd.filter_map(Result::ok).map(|e| e.path()).filter(|p| p.extension().map_or(false, |e| e == "maximus")).collect())
@@ -1114,6 +1218,7 @@ impl MaximusApp {
 
     fn settings_window(&mut self, ctx: &egui::Context) {
         let mut open = self.settings_open;
+        #[cfg(not(target_arch = "wasm32"))]
         let mut restart = false;
         let mut changed = false;
         egui::Window::new("Settings").open(&mut open).collapsible(false).resizable(false).show(ctx, |ui| {
@@ -1134,6 +1239,8 @@ impl MaximusApp {
             changed |= ui.add(egui::Slider::new(&mut self.settings.math_size, 12.0..=40.0).text("Math size")).changed();
             changed |= ui.checkbox(&mut self.settings.contextual_help, "Contextual help follows the cursor").changed();
             ui.separator();
+            #[cfg(not(target_arch = "wasm32"))]
+            {
             ui.label("Maxima executable (empty = search PATH)");
             changed |= ui.text_edit_singleline(&mut self.settings.maxima_path).changed();
             if ui.button("Apply and restart Maxima").clicked() {
@@ -1147,6 +1254,12 @@ impl MaximusApp {
                 ui.label("gnuplot executable");
                 changed |= ui.text_edit_singleline(&mut self.settings.gnuplot_path).changed();
             });
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                ui.label("Maxima runs locally in a Web Worker. Stop resets CAS state and outputs.");
+                ui.label("Plots use the built-in renderer. MCP, shell commands and native executables are desktop-only.");
+            }
             if let Some(d) = settings::plugin_dir() {
                 ui.separator();
                 ui.label(format!("Plugin folder: {}", d.display()));
@@ -1157,6 +1270,7 @@ impl MaximusApp {
             self.settings.save();
             self.gnuplot_cache.clear();
         }
+        #[cfg(not(target_arch = "wasm32"))]
         if restart {
             self.restart_backend();
         }
@@ -1166,6 +1280,14 @@ impl MaximusApp {
         let mut open = self.plugins_open;
         let mut reload = false;
         egui::Window::new("Plugins").open(&mut open).collapsible(false).resizable(false).show(ctx, |ui| {
+            #[cfg(target_arch = "wasm32")]
+            {
+                ui.label("Import a plugin folder containing plugin.toml and its Maxima files.");
+                ui.label("Import, removal and reload reset Maxima state and outputs.");
+                if ui.button("Import plugin folder...").clicked() {
+                    self.web_platform.import_plugin();
+                }
+            }
             if self.plugins.is_empty() {
                 ui.label("No plugins found.");
                 if let Some(d) = settings::plugin_dir() {
@@ -1190,6 +1312,12 @@ impl MaximusApp {
                     ui.label(RichText::new(&p.manifest.description).small());
                 }
                 ui.label(RichText::new(format!("{} menu items, {} palettes, {} snippets", p.manifest.menu.len(), p.manifest.palette.len(), p.manifest.snippet.len())).small().weak());
+                #[cfg(target_arch = "wasm32")]
+                if ui.button(format!("Remove {}", p.manifest.name)).clicked() {
+                    if let Some(folder) = p.dir.file_name().and_then(|n| n.to_str()) {
+                        self.web_platform.remove_plugin(folder);
+                    }
+                }
                 ui.separator();
             }
             if ui.button("Reload plugins").clicked() {
@@ -1198,7 +1326,46 @@ impl MaximusApp {
         });
         self.plugins_open = open;
         if reload {
+            #[cfg(not(target_arch = "wasm32"))]
             self.load_plugins();
+            #[cfg(target_arch = "wasm32")]
+            self.restart_backend();
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn poll_web_platform(&mut self) {
+        use crate::web_platform::Event;
+        for event in self.web_platform.take_events() {
+            match event {
+                Event::NotebookOpened { name, contents } => match Notebook::from_json(&contents) {
+                    Ok(notebook) => {
+                        self.session.notebook = notebook;
+                        self.cell_ui.clear();
+                        self.out_views.clear();
+                        self.active_cell = None;
+                        self.current_path = Some(name.into());
+                        self.web_autosave = true;
+                        self.restart_backend();
+                        self.messages.push("Opened notebook; evaluate cells to restore CAS state.".into());
+                    }
+                    Err(error) => self.messages.push(format!("Could not open notebook: {error}")),
+                },
+                Event::FilesChanged => {
+                    self.restart_backend();
+                    self.messages.push("Imported files updated. Maxima state and outputs reset.".into());
+                }
+                Event::NotebookSaved => {
+                    if let Some(snapshot) = self.web_save_pending.take() {
+                        self.last_saved_json = snapshot;
+                    }
+                }
+                Event::Error { operation, message } => {
+                    self.web_save_pending = None;
+                    self.messages.push(format!("{operation}: {message}"));
+                }
+                Event::Initialized | Event::NotebookRestored { .. } | Event::PluginSelected { .. } => {}
+            }
         }
     }
 }
@@ -1281,19 +1448,13 @@ fn make_backend(settings: &Settings) -> Box<dyn Backend> {
     #[cfg(target_arch = "wasm32")]
     {
         let _ = settings;
-        Box::new(NullBackend::new("Maxima cannot run inside the browser yet. Connect a remote Maxima backend to use the web version."))
+        Box::new(maximus_backend_web::WebBackend::new())
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn dirs_home() -> Option<PathBuf> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        dirs::document_dir().or_else(dirs::home_dir)
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        None
-    }
+    dirs::document_dir().or_else(dirs::home_dir)
 }
 
 pub fn structure_buttons() -> Vec<(&'static str, Template)> {

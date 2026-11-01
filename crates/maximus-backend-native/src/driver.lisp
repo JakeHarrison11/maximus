@@ -50,7 +50,10 @@
                            (mfuncall '$float v))
              (error () nil))))
     (and (realp f)
-         (not (and (floatp f) (or (sb-ext:float-nan-p f) (sb-ext:float-infinity-p f))))
+         (not (and (floatp f)
+                   #+sbcl (or (sb-ext:float-nan-p f) (sb-ext:float-infinity-p f))
+                   #+ecl (or (ext:float-nan-p f) (ext:float-infinity-p f))
+                   #-(or sbcl ecl) (not (<= (- most-positive-double-float) f most-positive-double-float))))
          (coerce f 'double-float))))
 
 (defun mx-at (f var val)
@@ -69,14 +72,20 @@
 
 (defun mx-jnum (s v)
   (if v
-      (let ((*read-default-float-format* 'double-float)) (format s "~a" (if (integerp v) v v)))
+      (let ((*read-default-float-format* 'double-float))
+        (write-string (substitute #\e #\d (substitute #\e #\D (format nil "~a" v))) s))
       (write-string "null" s)))
 
 (defun mx-jstr (s str)
   (write-char #\" s)
   (loop for c across str do
     (case c (#\" (write-string "\\\"" s)) (#\\ (write-string "\\\\" s))
-      (#\Newline (write-string "\\n" s)) (t (write-char c s))))
+      (#\Newline (write-string "\\n" s))
+      (#\Return (write-string "\\r" s))
+      (#\Tab (write-string "\\t" s))
+      (t (if (< (char-code c) 32)
+             (format s "\\u~4,'0x" (char-code c))
+             (write-char c s)))))
   (write-char #\" s))
 
 (defun mx-range-p (x)
@@ -206,7 +215,7 @@
           (catch 'macsyma-quit
             (setq result (if (mx-plot-form-p form) (mx-run-plot form) (meval* form)))
             (setq ok t))
-        (sb-sys:interactive-interrupt () (setq errtext "Interrupted"))
+        #+sbcl (sb-sys:interactive-interrupt () (setq errtext "Interrupted"))
         (error (e) (setq errtext (princ-to-string e)))))
     (let ((captured (get-output-stream-string out)))
       (cond
