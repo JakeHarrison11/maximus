@@ -9,17 +9,21 @@ const source = (await readFile(new URL("./maxima-worker.js", import.meta.url), "
         "const getInstalledPackageFiles = () => Promise.resolve(globalThis.testPackages);");
 let instance = 0;
 
-async function worker() {
+async function worker({ plan = "/maxima/src/init-cl.lisp\n", failAt } = {}) {
     const mounted = new Map();
     const messages = [];
+    const calls = [];
     globalThis.testPackages = [];
     globalThis.testMaxima = async ({ print }) => ({
         FS: {
+            readFile() { return plan; },
             mkdirTree() {},
             writeFile(path, bytes) { mounted.set(path, [...bytes]); },
             unlink(path) { mounted.delete(path); },
         },
         ccall(name, _result, _types, args) {
+            calls.push([name, args]);
+            if (name === failAt) throw new RangeError("Maximum call stack size exceeded");
             if (name === "evaluate_maxima" || name === "list_variables") {
                 print(`@@MX\t${args[0]}\tdone\tok`);
             }
@@ -31,6 +35,7 @@ async function worker() {
     await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}#${instance++}`);
     return {
         mounted,
+        calls,
         async send(data) {
             const start = messages.length;
             scope.onmessage({ data });
@@ -56,6 +61,38 @@ test("mounts persisted packages at init and refreshes/removes files before evalu
     assert.ok(result.some(message => message.line === "@@MX\t4\tdone\tok"));
     assert.equal(instance.mounted.has("/maxima/share/demo/a.mac"), false);
     assert.deepEqual(instance.mounted.get("/maxima/share/other/b.lisp"), [2]);
+});
+
+test("startup loads the build-time plan in order before reporting readiness", async () => {
+    const instance = await worker({ plan: "/maxima/src/globals.lisp\n/maxima/src/numerical/slatec.lisp\n" });
+    assert.deepEqual(await instance.send({ type: "init", files: [] }), [{ type: "ready" }]);
+    assert.deepEqual(instance.calls, [
+        ["initialize_maxima", []],
+        ["load_maxima_file", ["/maxima/src/globals.lisp"]],
+        ["load_maxima_file", ["/maxima/src/numerical/slatec.lisp"]],
+        ["finish_maxima", []],
+    ]);
+});
+
+test("startup stack errors identify the failing source and never report readiness", async t => {
+    t.mock.method(console, "error", () => {});
+    const instance = await worker({ failAt: "load_maxima_file" });
+    const messages = await instance.send({ type: "init", files: [] });
+    assert.equal(messages[0].type, "error");
+    assert.match(messages[0].message, /loading \/maxima\/src\/init-cl.lisp: Maximum call stack size exceeded/);
+    assert.ok(!messages.some(message => message.type === "ready"));
+    assert.ok(!instance.calls.some(([name]) => name === "finish_maxima"));
+});
+
+test("invalid source-load plans fail explicitly before loading any source", async t => {
+    t.mock.method(console, "error", () => {});
+    for (const plan of ["", "/maxima/src/../escape.lisp", "/workspace/override.lisp"]) {
+        const instance = await worker({ plan });
+        const messages = await instance.send({ type: "init", files: [] });
+        assert.equal(messages[0].type, "error");
+        assert.match(messages[0].message, /Invalid Maxima source-load plan/);
+        assert.deepEqual(instance.calls, [["initialize_maxima", []]]);
+    }
 });
 
 test("user uploads cannot override optional package paths", async t => {

@@ -69,6 +69,11 @@ require_file "$ECL_WASM_DIR/help.doc"
 require_file "$ECL_WASM_DIR/libecl.a"
 require_file "$ECL_WASM_DIR/libeclgc.a"
 require_file "$ECL_WASM_DIR/libeclgmp.a"
+require_file "$ECL_WASM_DIR/ecl/config-internal.h"
+if grep -q '^#define ECL_CAN_SET_STACK_SIZE' "$ECL_WASM_DIR/ecl/config-internal.h"; then
+    echo "ECL WASM still probes OS stack limits; rebuild with scripts/build-ecl-wasm.sh." >&2
+    exit 1
+fi
 require_dir "$MAXIMA_SRC/src"
 require_file "$MAXIMA_SRC/src/maxima-package.lisp"
 require_file "$MAXIMA_SRC/COPYING"
@@ -113,6 +118,9 @@ fi
 OUT_DIR="$(mkdir -p "$OUT_DIR" && cd "$OUT_DIR" && pwd)"
 mkdir -p "$OUT_DIR/licenses"
 rm -rf "$OUT_DIR/packages"
+"$ECL_HOST_DIR/bin/ecl" -norc -shell "$ROOT/scripts/maxima-load-plan.lisp" \
+    "$MAXIMA_SRC/" "$OUT_DIR/load-plan.txt"
+[[ -s "$OUT_DIR/load-plan.txt" ]] || { echo "Maxima source-load plan is empty" >&2; exit 1; }
 
 INFO_ARGS=()
 if [[ -n "$HELP_INFO" ]]; then
@@ -138,18 +146,20 @@ EMCC_FLAGS=(
     "$ROOT/crates/maximus-backend-web/runtime/embed.c"
     "-I$ECL_WASM_DIR" "-L$ECL_WASM_DIR"
     -lecl -leclgc -leclgmp -lm
-    -O0
+    -O2
+    -fwasm-exceptions
+    -sSUPPORT_LONGJMP=wasm
     -sSTACK_SIZE=8388608
     -sALLOW_MEMORY_GROWTH=1
-    -sBINARYEN_EXTRA_PASSES=--spill-pointers
+    -sBINARYEN_EXTRA_PASSES=--spill-pointers,--coalesce-locals
     -sMODULARIZE=1
     -sEXPORT_ES6=1
     -sENVIRONMENT=web,worker,node
     -sEXPORTED_RUNTIME_METHODS=ccall,FS
-    -sEXPORTED_FUNCTIONS=_initialize_maxima,_evaluate_lisp,_evaluate_maxima,_list_variables,_malloc,_free
+    -sEXPORTED_FUNCTIONS=_initialize_maxima,_load_maxima_file,_finish_maxima,_evaluate_lisp,_evaluate_maxima,_list_variables,_malloc,_free
     --preload-file "$MAXIMA_SRC/src@/maxima/src"
     --preload-file "$MAXIMA_SRC/lisp-utils@/maxima/lisp-utils"
-    --preload-file "$ECL_SRC/contrib/asdf/asdf.lisp@/asdf.lisp"
+    --preload-file "$OUT_DIR/load-plan.txt@/load-plan.txt"
     --preload-file "$ECL_WASM_DIR/help.doc@/ecl/help.doc"
     --preload-file "$ROOT/crates/maximus-backend-web/runtime/boot.lisp@/boot.lisp"
     --preload-file "$ROOT/crates/maximus-backend-native/src/driver.lisp@/driver.lisp"

@@ -2,7 +2,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test:web": "node test-web.mjs && node test-web-packages.mjs"
+    "test:web": "node test-web-runtime.mjs && node test-web.mjs && node test-web-packages.mjs"
   },
   "devDependencies": {
     "playwright": "1.56.1"

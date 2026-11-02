@@ -50,8 +50,23 @@ emcc --version | head -1 | grep -q ' 4\.0\.15 ' || {
 }
 export PATH="$HOST/bin:$PATH"
 cd "$WASM_BUILD"
-emconfigure "$SOURCE/src/configure" --srcdir="$SOURCE/src" \
-    --host=wasm32-unknown-emscripten --build="$("$SOURCE/src/config.guess")" \
+# ECL does not invalidate all objects when compiler/longjmp settings change.
+if [[ -f Makefile ]]; then
+    make clean
+fi
+# ECL's pinned configure forces -O0 on WASM. Optimized frames are important on
+# Safari, whose execution stack is separate from Emscripten's linear-memory stack.
+sed -e 's/CFLAGS="${CFLAGS} -DECL_C_COMPATIBLE_VARIADIC_DISPATCH -O0"/CFLAGS="${CFLAGS} -DECL_C_COMPATIBLE_VARIADIC_DISPATCH -O2 -fwasm-exceptions -sSUPPORT_LONGJMP=wasm"/' \
+    -e 's/if test "x${cross_compiling}" = "xyes"; then/if test "x${host}" = "xwasm32-unknown-emscripten" || test "x${cross_compiling}" = "xyes"; then/' \
+    "$SOURCE/src/configure" > configure-wasm
+grep -q 'CFLAGS="${CFLAGS} -DECL_C_COMPATIBLE_VARIADIC_DISPATCH -O2 -fwasm-exceptions -sSUPPORT_LONGJMP=wasm"' configure-wasm || {
+    echo "Expected ECL 26.3.27 WASM compiler flags were not found" >&2
+    exit 1
+}
+# Emscripten has RLIMIT_STACK headers but no working prlimit64 syscall.
+ac_cv_have_decl_RLIMIT_STACK=no ECL_TO_RUN="$HOST/bin/ecl" LDFLAGS="-fwasm-exceptions -sSUPPORT_LONGJMP=wasm" \
+    emconfigure bash "$WASM_BUILD/configure-wasm" --srcdir="$SOURCE/src" \
+    --host=wasm32-unknown-emscripten --build="$(bash "$SOURCE/src/config.guess")" \
     --with-cross-config="$SOURCE/src/util/wasm32-unknown-emscripten.cross_config" \
     --prefix="$WASM" --disable-shared --with-tcp=no --with-cmp=no --with-asdf=no
 make -j"$JOBS"

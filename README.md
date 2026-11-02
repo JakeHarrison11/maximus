@@ -84,6 +84,14 @@ builder installs a native host compiler in `temp/ecl-host` and cross-built libra
 in `temp/ecl-wasm`. Each script supports `--help` for alternate input directories.
 After Rust, JS, or HTML changes, reuse the engine with `build-web.sh --skip-runtime`;
 after Lisp driver/bootstrap or C bridge changes, rebuild the runtime first.
+The ECL builder disables OS stack-limit probing (`prlimit64` is unsupported in
+Emscripten) and overrides upstream's WASM `-O0` with `-O2` to reduce execution-stack
+pressure in Safari. Changing these ECL settings requires rebuilding ECL, the
+Maxima runtime, and the browser bundle, not just `build-web.sh --skip-runtime`.
+The runtime also uses native WASM exception-based longjmp and compacts locals
+after GC pointer spilling to keep execution frames small. ASDF resolves the
+Maxima source-load order on the host at build time; browser startup loads the
+resulting files in separate WASM calls rather than source-loading ASDF.
 
 Deploy the **entire** `dist/web` directory on an ordinary HTTPS static host. Use
 `--public-url /your/subpath/` for an explicit deployment path, or `./` for a
@@ -138,14 +146,23 @@ node --test crates/maximus-app/web/*.test.mjs
 npm ci --prefix scripts
 cd scripts
 npx playwright install chromium
+node test-web-runtime.mjs
 node test-web.mjs
 node test-web-packages.mjs
+npx playwright install webkit
+MAXIMUS_TEST_BROWSER=webkit node test-web-runtime.mjs
+MAXIMUS_TEST_BROWSER=webkit node test-web.mjs --minimal-only
 ```
 
 `MAXIMUS_WEB_URL` selects another served base URL (including a subpath). The
 Playwright test uses the real production worker and canvas application: Unicode,
 algebra/calculus, plotting, imports/downloads, recovery, Stop, and an offline
 reload with networking disabled. `--ui-only` skips the direct-worker segment.
+The runtime smoke test also runs in WebKit (Safari's engine), checking startup,
+calculus and arithmetic, and rejecting stack-overflow/`prlimit64` diagnostics.
+WebKit runs this test with a 256 KiB execution-stack limit to cover mobile stack
+pressure instead of relying on desktop defaults.
+This is not a substitute for testing on a physical iPhone.
 
 ## Icon credits
 

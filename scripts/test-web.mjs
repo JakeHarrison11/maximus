@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
-import { chromium } from "playwright";
+import { chromium, webkit } from "playwright";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 const base = process.env.MAXIMUS_WEB_URL || "http://127.0.0.1:8765/";
-const browser = await chromium.launch({ headless: true });
+const engine = process.env.MAXIMUS_TEST_BROWSER || "chromium";
+assert.ok(["chromium", "webkit"].includes(engine), `Unknown browser: ${engine}`);
+const browser = await { chromium, webkit }[engine].launch({
+    headless: true,
+    ...(process.env.MAXIMUS_TEST_BROWSER_EXECUTABLE ? { executablePath: process.env.MAXIMUS_TEST_BROWSER_EXECUTABLE } : {}),
+});
 const context = await browser.newContext({ acceptDownloads: true });
 const page = await context.newPage();
 page.on("filechooser", () => {});

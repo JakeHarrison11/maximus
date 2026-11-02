@@ -85,6 +85,18 @@ EMSCRIPTEN_KEEPALIVE int initialize_maxima(void) {
         return 0;
     }
 
+    return 1;
+}
+
+EMSCRIPTEN_KEEPALIVE int load_maxima_file(const char *path) {
+    cl_object function = ecl_read_from_cstring("cl-user::maximus-web-load-file");
+    return cl_funcall(2, cl_symbol_function(function), maxima_utf8_string(path)) != ECL_NIL;
+}
+
+EMSCRIPTEN_KEEPALIVE int finish_maxima(void) {
+    if (!evaluate_lisp("(cl-user::maximus-web-finish)")) {
+        return 0;
+    }
     maxima_initialized = 1;
     return 1;
 }

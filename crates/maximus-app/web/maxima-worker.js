@@ -9,6 +9,7 @@ let tail = [];
 let chain = Promise.resolve();
 let packageSnapshot;
 let packagePaths = new Set();
+let stage = "loading runtime";
 
 function output(line) {
     if (line.startsWith("@@MX\t")) {
@@ -58,14 +59,31 @@ async function mountPackages() {
 async function initialize(files) {
     if (runtime || initializing) throw new Error("Maxima was initialized twice");
     initializing = true;
+    stage = "creating WASM runtime";
     runtime = await createMaxima({
         locateFile: (name) => new URL(`runtime/${name}`, import.meta.url).href,
         print: output,
         printErr: (line) => { tail.push(line); console.error(line); },
     });
+    stage = "booting ECL";
     if (runtime.ccall("initialize_maxima", "number", [], []) !== 1) {
         throw new Error(`Maxima initialization failed: ${tail.join("\n")}`);
     }
+    const plan = runtime.FS.readFile("/load-plan.txt", { encoding: "utf8" }).trim().split("\n");
+    if (!plan.length || plan.some(path => !/^\/maxima\/(?:src|lisp-utils)\/(?:[\w-]+\/)*[\w-]+\.lisp$/.test(path))) {
+        throw new Error("Invalid Maxima source-load plan");
+    }
+    for (const path of plan) {
+        stage = `loading ${path}`;
+        if (runtime.ccall("load_maxima_file", "number", ["string"], [path]) !== 1) {
+            throw new Error(`Maxima source loading failed: ${path}`);
+        }
+    }
+    stage = "finishing Maxima initialization";
+    if (runtime.ccall("finish_maxima", "number", [], []) !== 1) {
+        throw new Error("Maxima final initialization failed");
+    }
+    stage = "mounting persisted files";
     mount(files);
     await mountPackages();
     self.postMessage({ type: "ready" });
@@ -76,6 +94,7 @@ async function request({ id, kind, code }) {
     await mountPackages();
     currentId = id;
     completed = false;
+    stage = `processing ${kind} request ${id}`;
     let ok;
     if (kind === "eval") {
         ok = runtime.ccall("evaluate_maxima", "number", ["string", "string"], [id, code]);
@@ -97,6 +116,6 @@ self.onmessage = ({ data }) => {
         else throw new Error("Unknown Maxima worker request");
     }).catch((error) => {
         console.error(error);
-        self.postMessage({ type: "error", message: `${error.message}\n${tail.join("\n")}` });
+        self.postMessage({ type: "error", message: `${stage}: ${error.message}\n${error.stack || ""}\n${tail.join("\n")}` });
     });
 };
