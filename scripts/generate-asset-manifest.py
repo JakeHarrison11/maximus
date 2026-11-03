@@ -22,6 +22,7 @@ def main() -> None:
     root = args.dist.resolve()
     required = [
         "index.html",
+        "maximus.png",
         "runtime/maxima.mjs",
         "runtime/maxima.data",
         "runtime/maxima.wasm",
