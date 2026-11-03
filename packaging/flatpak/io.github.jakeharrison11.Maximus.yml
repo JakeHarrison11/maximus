@@ -38,7 +38,7 @@ modules:
         SBCL_HOME: /app/lib/sbcl
     config-opts:
       - --enable-sbcl
-      - --enable-sbcl-exec
+      - --disable-sbcl-exec
       - --with-sbcl=/app/bin/sbcl
       - --disable-clisp
       - --disable-gcl
@@ -50,6 +50,7 @@ modules:
       - mkdir -p /app/share/info
       - cp doc/info/maxima.info* doc/info/maxima-index*.lisp /app/share/info/
       - install -Dm644 maxima-source.tar.gz /app/share/maximus/sources/maxima-5.50.0.tar.gz
+      - test -s /app/lib/maxima/5.50.0/binary-sbcl/maxima.core
       - /app/bin/maxima --version
     sources:
       - type: archive

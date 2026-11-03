@@ -101,6 +101,7 @@ jobs:
           flatpak build-bundle repo maximus.flatpak io.github.jakeharrison11.Maximus
       - name: Test bundled Flatpak engine
         run: |
+          test -s build-dir/files/lib/maxima/5.50.0/binary-sbcl/maxima.core
           cmp crates/maximus-app/assets/maximus.png build-dir/export/share/icons/hicolor/512x512/apps/io.github.jakeharrison11.Maximus.png
           grep -Fx 'StartupWMClass=io.github.jakeharrison11.Maximus' build-dir/export/share/applications/io.github.jakeharrison11.Maximus.desktop
           flatpak install --user -y ./maximus.flatpak

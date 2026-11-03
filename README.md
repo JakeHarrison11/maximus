@@ -28,7 +28,9 @@ extension. Keep their branches aligned in the packaging manifest and workflow;
 the 24.08 Rust extension is too old for egui's Rust 1.95 minimum requirement.
 
 The x86_64 Flatpak and AppImage bundle Maxima 5.50.0, an SBCL 2.5.11-based
-standalone engine, share packages and the English manual. No host Maxima or
+engine, share packages and the English manual. Flatpak uses a separate Lisp
+core file so packaging tools cannot strip it from the SBCL executable;
+AppImage preserves its standalone executable unchanged. No host Maxima or
 Lisp installation is required. Gnuplot is not bundled; the built-in plot
 renderer works without it. Maxima's corresponding source archive and both
 projects' license notices are included under `usr/share/maximus/sources` and
