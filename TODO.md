@@ -1,11 +1,14 @@
-- Clean up minimal mode
-- Get a WASM build going
 - Get windows/mac going
 - Test test test
-- Make an icon
 - Redo the readme in a human way
 - MCP Flesh out
 - Plugin flesh out
-- Move to CAS agnostic architecture (sagemath, xcas, etc.)
 - Look into packaging w maxima on win/mac
-- Flatpak/Appimage/deb/rpm packages for Linux
+- Fix input bugs
+- Fix output rendering bugs (^2)
+- Get looking right on mobile
+- Min width for calc
+- Min width for notebook 
+- Clean up web interface
+- Clean up tooltip text
+- Fix input on keypad
