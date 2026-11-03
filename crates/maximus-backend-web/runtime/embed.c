@@ -2,6 +2,7 @@
 #include <emscripten/emscripten.h>
 #include <stdio.h>
 #include <string.h>
+#include "compiled-maxima.h"
 
 static int maxima_initialized = 0;
 
@@ -89,6 +90,9 @@ EMSCRIPTEN_KEEPALIVE int initialize_maxima(void) {
 }
 
 EMSCRIPTEN_KEEPALIVE int load_maxima_file(const char *path) {
+    if (load_compiled_maxima(path)) {
+        return 1;
+    }
     cl_object function = ecl_read_from_cstring("cl-user::maximus-web-load-file");
     return cl_funcall(2, cl_symbol_function(function), maxima_utf8_string(path)) != ECL_NIL;
 }

@@ -72,6 +72,7 @@ ac_cv_have_decl_RLIMIT_STACK=no ECL_TO_RUN="$HOST/bin/ecl" LDFLAGS="-fwasm-excep
 make -j"$JOBS"
 make install bindir="$WASM"
 cp "$SOURCE/contrib/asdf/asdf.lisp" "$WASM/asdf.lisp"
+cp "$WASM_BUILD/target-info.lsp" "$WASM/target-info.lsp"
 for library in libecl.a libeclgc.a libeclgmp.a asdf.lisp help.doc; do
     [[ -s "$WASM/$library" ]] || { echo "Missing or empty ECL artifact: $library" >&2; exit 1; }
 done

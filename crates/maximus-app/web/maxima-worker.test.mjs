@@ -13,6 +13,7 @@ async function worker({ plan = "/maxima/src/init-cl.lisp\n", failAt } = {}) {
     const mounted = new Map();
     const messages = [];
     const calls = [];
+    const progress = [];
     globalThis.testPackages = [];
     globalThis.testMaxima = async ({ print }) => ({
         FS: {
@@ -30,12 +31,13 @@ async function worker({ plan = "/maxima/src/init-cl.lisp\n", failAt } = {}) {
             return 1;
         },
     });
-    const scope = { postMessage: message => messages.push(message) };
+    const scope = { postMessage: message => message.type === "progress" ? progress.push(message.message) : messages.push(message) };
     globalThis.self = scope;
     await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}#${instance++}`);
     return {
         mounted,
         calls,
+        progress,
         async send(data) {
             const start = messages.length;
             scope.onmessage({ data });
@@ -64,14 +66,16 @@ test("mounts persisted packages at init and refreshes/removes files before evalu
 });
 
 test("startup loads the build-time plan in order before reporting readiness", async () => {
-    const instance = await worker({ plan: "/maxima/src/globals.lisp\n/maxima/src/numerical/slatec.lisp\n" });
+    const instance = await worker({ plan: "/maxima/src/globals.fasc\n/maxima/src/numerical/slatec.lisp\n" });
     assert.deepEqual(await instance.send({ type: "init", files: [] }), [{ type: "ready" }]);
     assert.deepEqual(instance.calls, [
         ["initialize_maxima", []],
-        ["load_maxima_file", ["/maxima/src/globals.lisp"]],
+        ["load_maxima_file", ["/maxima/src/globals.fasc"]],
         ["load_maxima_file", ["/maxima/src/numerical/slatec.lisp"]],
         ["finish_maxima", []],
     ]);
+    assert.ok(instance.progress.some(message => message.startsWith("Loading Maxima")));
+    assert.match(instance.progress.at(-1), /Maxima ready in .*WASM .*ECL .*modules .*storage/);
 });
 
 test("startup stack errors identify the failing source and never report readiness", async t => {

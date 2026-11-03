@@ -4,9 +4,18 @@ export class MaximaEngine {
         this.queue = [];
         this.ready = false;
         this.disposed = false;
+        const status = message => {
+            const element = document.getElementById("engine-status");
+            if (element) element.textContent = message;
+        };
+        status("Loading Maxima worker…");
         this.worker = new Worker(new URL("maxima-worker.js", document.baseURI), { type: "module" });
         this.worker.onmessage = ({ data }) => {
             if (this.disposed) return;
+            if (data.type === "progress") {
+                status(data.message);
+                return;
+            }
             if (data.type === "ready") {
                 this.ready = true;
                 for (const request of this.queue.splice(0)) this.worker.postMessage(request);

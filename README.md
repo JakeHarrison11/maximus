@@ -50,9 +50,11 @@ Contributors and coding agents: see [AGENTS.md](AGENTS.md) for architecture, wor
 ## Browser build
 
 The browser UI uses Rust's `wasm32-unknown-unknown` target. The separate CAS engine
-uses **Emscripten 4.0.15** and **ECL 26.3.27**. Maxima is source-loaded using ECL's
-bytecode interpreter, not a native Maxima executable or an ahead-of-time compiled
-Maxima image. Startup and heavy calculations can be slower than the desktop build.
+uses **Emscripten 4.0.15** and **ECL 26.3.27**. Native host ECL cross-compiles most
+Maxima Lisp files to C and then WASM during the build. Browser startup initializes
+these linked modules instead of compiling their source. Browser shims and two
+formatting-macro files still use ECL's bytecode interpreter; optional packages
+can still load Lisp/Maxima source.
 The tested Maxima source revision is
 `83548a8c991d47f7bf3317d1d67aaf65a417a281` (5.50post).
 
@@ -92,6 +94,22 @@ The runtime also uses native WASM exception-based longjmp and compacts locals
 after GC pointer spilling to keep execution frames small. ASDF resolves the
 Maxima source-load order on the host at build time; browser startup loads the
 resulting files in separate WASM calls rather than source-loading ASDF.
+The ECL install includes `target-info.lsp`, required by the Maxima cross-compiler.
+If this file is missing in an older ECL install, rerun `build-ecl-wasm.sh`.
+The runtime builder uses `scripts/compile-maxima-wasm.lisp` to generate the
+compiled module archive and initializer dispatch, and fails explicitly on
+compilation errors. Original sources remain available for autoload compatibility.
+The native WASM binary is approximately 34 MB uncompressed (5.2 MiB with gzip);
+enable HTTP compression on the static host to reduce first-visit transfer time.
+The footer shows startup progress and a timing breakdown for WASM download/
+initialization, ECL boot, Maxima module initialization, finalization and persisted
+storage. Offline-cache status is displayed separately. If mobile startup is
+slow, compare the first visit and a reload after **Offline ready**; the breakdown
+distinguishes network/engine setup from module initialization. A precompiled-bytecode
+experiment improved desktop WebKit timings but doubled the data download and
+regressed on iPhone, so that experiment was removed in favor of native WASM
+compilation. Local small-stack WebKit cold startup measured approximately
+one second with the native runtime; physical iPhone and network timings vary.
 
 Deploy the **entire** `dist/web` directory on an ordinary HTTPS static host. Use
 `--public-url /your/subpath/` for an explicit deployment path, or `./` for a
@@ -163,6 +181,9 @@ calculus and arithmetic, and rejecting stack-overflow/`prlimit64` diagnostics.
 WebKit runs this test with a 256 KiB execution-stack limit to cover mobile stack
 pressure instead of relying on desktop defaults.
 This is not a substitute for testing on a physical iPhone.
+The runtime test reports worker startup time. The application footer reports
+the phase breakdown; on a narrow screen, scroll the footer horizontally to
+read the full timing line.
 
 ## Icon credits
 

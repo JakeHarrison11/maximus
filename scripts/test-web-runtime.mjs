@@ -18,11 +18,13 @@ try {
     const url = new URL("runtime-test.html", base).href;
     await page.route(url, route => route.fulfill({ contentType: "text/html", body: "<!doctype html><title>Runtime test</title>" }));
     await page.goto(url);
-    const frames = await page.evaluate(async base => {
+    const { frames, startupMs } = await page.evaluate(async base => {
         const worker = new Worker(new URL("maxima-worker.js", base), { type: "module" });
+        const started = performance.now();
         try {
             return await new Promise((resolve, reject) => {
                 const frames = [];
+                let startupMs;
                 const timeout = setTimeout(() => reject(new Error("Maxima runtime timed out")), 180000);
                 const fail = message => {
                     clearTimeout(timeout);
@@ -32,13 +34,14 @@ try {
                 worker.onmessage = ({ data }) => {
                     if (data.type === "error") fail(data.message);
                     if (data.type === "ready") {
+                        startupMs = performance.now() - started;
                         worker.postMessage({ type: "request", id: "1", kind: "eval", code: "integrate(x^2,x); 6*7;" });
                     }
                     if (data.type === "frame") {
                         frames.push(data.line);
                         if (data.line.startsWith("@@MX\t1\tdone\t")) {
                             clearTimeout(timeout);
-                            resolve(frames);
+                            resolve({ frames, startupMs });
                         }
                     }
                 };
@@ -52,7 +55,9 @@ try {
     assert.ok(frames.some(line => line.includes("\tresult\t") && line.endsWith("\t42")), JSON.stringify(frames));
     assert.ok(frames.includes("@@MX\t1\tdone\tok"), JSON.stringify(frames));
     assert.ok(!diagnostics.some(line => /prlimit64|maximum.*stack|stack overflow/i.test(line)), diagnostics.join("\n"));
-    console.log(`PASS: ${engine} boots Maxima and evaluates calculus and arithmetic without stack/syscall errors`);
+    assert.ok(!diagnostics.some(line => /Loading.*\/maxima\/src\/(?:globals|simp|nparse)\.lisp/.test(line)),
+        "Core Maxima modules must initialize from compiled WASM, not source");
+    console.log(`PASS: ${engine} boots Maxima in ${Math.round(startupMs)} ms and evaluates calculus and arithmetic without stack/syscall errors`);
 } finally {
     await browser.close();
 }

@@ -258,6 +258,8 @@ try {
             }
             await touchPage.screenshot({ path: "temp/web-minimal.png" });
             await waitForSaved(nb => nb.cells.some(cell => cell.outputs.some(output => output.Result?.text === "42")), "touch calculator evaluation", touchPage);
+            assert.match(await touchPage.locator("#engine-status").textContent(), /Maxima ready in .*WASM .*ECL .*modules .*storage/);
+            assert.ok(await touchPage.locator("#offline-status").count());
             await touchPage.screenshot({ path: "temp/web-minimal.png" });
             console.log(`PASS: minimal calculator evaluates 6 × 7 through real ${touch ? "touch" : "moving mouse"} keypad events`);
         } finally {

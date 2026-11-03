@@ -11,6 +11,10 @@ let packageSnapshot;
 let packagePaths = new Set();
 let stage = "loading runtime";
 
+function progress(message) {
+    self.postMessage({ type: "progress", message });
+}
+
 function output(line) {
     if (line.startsWith("@@MX\t")) {
         if (line.startsWith(`@@MX\t${currentId}\tdone\t`)) completed = true;
@@ -60,32 +64,45 @@ async function initialize(files) {
     if (runtime || initializing) throw new Error("Maxima was initialized twice");
     initializing = true;
     stage = "creating WASM runtime";
+    const started = performance.now();
+    progress("Downloading and initializing Maxima WASM…");
     runtime = await createMaxima({
         locateFile: (name) => new URL(`runtime/${name}`, import.meta.url).href,
         print: output,
         printErr: (line) => { tail.push(line); console.error(line); },
     });
+    const created = performance.now();
     stage = "booting ECL";
+    progress(`Booting ECL (${Math.round((created - started) / 1000)} s downloading/initializing WASM)…`);
     if (runtime.ccall("initialize_maxima", "number", [], []) !== 1) {
         throw new Error(`Maxima initialization failed: ${tail.join("\n")}`);
     }
+    const booted = performance.now();
     const plan = runtime.FS.readFile("/load-plan.txt", { encoding: "utf8" }).trim().split("\n");
-    if (!plan.length || plan.some(path => !/^\/maxima\/(?:src|lisp-utils)\/(?:[\w-]+\/)*[\w-]+\.lisp$/.test(path))) {
+    if (!plan.length || plan.some(path => !/^\/maxima\/(?:src|lisp-utils)\/(?:[\w-]+\/)*[\w-]+\.(?:lisp|fasc)$/.test(path))) {
         throw new Error("Invalid Maxima source-load plan");
     }
-    for (const path of plan) {
+    for (const [index, path] of plan.entries()) {
         stage = `loading ${path}`;
+        if (index % 16 === 0) {
+            progress(`Loading Maxima ${index + 1}/${plan.length}: ${path.split("/").pop()} (${Math.round((performance.now() - booted) / 1000)} s)…`);
+        }
         if (runtime.ccall("load_maxima_file", "number", ["string"], [path]) !== 1) {
             throw new Error(`Maxima source loading failed: ${path}`);
         }
     }
+    const loaded = performance.now();
     stage = "finishing Maxima initialization";
+    progress("Finishing Maxima initialization…");
     if (runtime.ccall("finish_maxima", "number", [], []) !== 1) {
         throw new Error("Maxima final initialization failed");
     }
     stage = "mounting persisted files";
+    const finished = performance.now();
     mount(files);
     await mountPackages();
+    const ready = performance.now();
+    progress(`Maxima ready in ${((ready - started) / 1000).toFixed(1)} s — WASM ${((created - started) / 1000).toFixed(1)} s, ECL ${((booted - created) / 1000).toFixed(1)} s, modules ${((loaded - booted) / 1000).toFixed(1)} s, finalization ${((finished - loaded) / 1000).toFixed(1)} s, storage ${((ready - finished) / 1000).toFixed(1)} s`);
     self.postMessage({ type: "ready" });
 }
 

@@ -140,6 +140,9 @@ def main() -> None:
         "runtime/embed.c": repository / "crates/maximus-backend-web/runtime/embed.c",
         "runtime/boot.lisp": repository / "crates/maximus-backend-web/runtime/boot.lisp",
         "runtime/driver.lisp": repository / "crates/maximus-backend-native/src/driver.lisp",
+        "runtime/load-plan.txt": runtime / "load-plan.txt",
+        "build/compile-maxima-wasm.lisp": repository / "scripts/compile-maxima-wasm.lisp",
+        "ecl_wasm/target-info.lsp": ecl_wasm / "target-info.lsp",
     }
     checksums = {name: sha256(path) for name, path in hash_inputs.items()}
     emcc = pathlib.Path(shutil.which("emcc") or "")

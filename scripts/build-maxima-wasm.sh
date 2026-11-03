@@ -70,6 +70,7 @@ require_file "$ECL_WASM_DIR/libecl.a"
 require_file "$ECL_WASM_DIR/libeclgc.a"
 require_file "$ECL_WASM_DIR/libeclgmp.a"
 require_file "$ECL_WASM_DIR/ecl/config-internal.h"
+require_file "$ECL_WASM_DIR/target-info.lsp"
 if grep -q '^#define ECL_CAN_SET_STACK_SIZE' "$ECL_WASM_DIR/ecl/config-internal.h"; then
     echo "ECL WASM still probes OS stack limits; rebuild with scripts/build-ecl-wasm.sh." >&2
     exit 1
@@ -121,6 +122,10 @@ rm -rf "$OUT_DIR/packages"
 "$ECL_HOST_DIR/bin/ecl" -norc -shell "$ROOT/scripts/maxima-load-plan.lisp" \
     "$MAXIMA_SRC/" "$OUT_DIR/load-plan.txt"
 [[ -s "$OUT_DIR/load-plan.txt" ]] || { echo "Maxima source-load plan is empty" >&2; exit 1; }
+AOT_DIR="$(mktemp -d "$ROOT/temp/maxima-aot.XXXXXX")"
+trap 'rm -r "$AOT_DIR"' EXIT
+"$ECL_HOST_DIR/bin/ecl" -norc -shell "$ROOT/scripts/compile-maxima-wasm.lisp" \
+    "$MAXIMA_SRC/" "$ECL_WASM_DIR/target-info.lsp" "$AOT_DIR/" "$OUT_DIR/load-plan.txt"
 
 INFO_ARGS=()
 if [[ -n "$HELP_INFO" ]]; then
@@ -139,11 +144,13 @@ for package in "${PACKAGES[@]}"; do
     PACKAGE_ARGS+=(--package "$package")
 done
 
-# ECL's source-loading port, socket stubs, and CMP omission are defined in
+# ECL's browser port, socket stubs, and CMP omission are defined in
 # runtime/boot.lisp. The native driver's protocol stays the single source of
 # truth and is embedded at /driver.lisp for browser calls.
 EMCC_FLAGS=(
     "$ROOT/crates/maximus-backend-web/runtime/embed.c"
+    "-I$AOT_DIR"
+    "$AOT_DIR/maxima"
     "-I$ECL_WASM_DIR" "-L$ECL_WASM_DIR"
     -lecl -leclgc -leclgmp -lm
     -O2

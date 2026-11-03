@@ -8,7 +8,7 @@
       html, body { margin: 0; height: 100%; background: #1b1b1b; color: #ddd; font-family: sans-serif; }
       body { display: grid; grid-template-rows: minmax(0, 1fr) auto; overflow: hidden; }
       canvas { width: 100%; height: 100%; min-height: 0; display: block; }
-      #web-status { min-height: 32px; box-sizing: border-box; font-size: 12px; background: #222; padding: 8px 170px 8px 8px; }
+      #web-status { height: 32px; box-sizing: border-box; font-size: 12px; background: #222; padding: 8px 170px 8px 8px; white-space: nowrap; overflow-x: auto; }
       #startup { position: fixed; top: 20px; left: 20px; }
     </style>
     <link data-trunk rel="rust" data-bin="maximus" href="../Cargo.toml" />
@@ -21,7 +21,10 @@
   <body>
     <canvas id="maximus_canvas"></canvas>
     <div id="startup">Loading Maximus and local Maxima runtime...</div>
-    <div id="web-status">First visit needs a connection. Preparing offline assets...</div>
+    <div id="web-status">
+      <span id="engine-status">Preparing Maximus...</span>
+      | <span id="offline-status">First visit needs a connection. Preparing offline assets...</span>
+    </div>
     <script type="module" src="./packages-ui.js"></script>
     <script>
       window.addEventListener("error", event => {
@@ -32,12 +35,12 @@
       });
       if ("serviceWorker" in navigator) {
         navigator.serviceWorker.addEventListener("message", event => {
-          if (event.data.message) document.getElementById("web-status").textContent = event.data.message;
+          if (event.data.message) document.getElementById("offline-status").textContent = event.data.message;
         });
         window.addEventListener("load", () => navigator.serviceWorker.register("./service-worker.js")
-          .catch(error => { document.getElementById("web-status").textContent = `Offline setup failed: ${error.message}`; }));
+          .catch(error => { document.getElementById("offline-status").textContent = `Offline setup failed: ${error.message}`; }));
       } else {
-        document.getElementById("web-status").textContent = "Offline reload unavailable: service workers need HTTPS or localhost.";
+        document.getElementById("offline-status").textContent = "Offline reload unavailable: service workers need HTTPS or localhost.";
       }
     </script>
   </body>
