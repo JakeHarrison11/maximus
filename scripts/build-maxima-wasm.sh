@@ -183,19 +183,7 @@ write_help() {
     if [[ -n "$HELP_INFO" ]]; then
         cp "$HELP_INFO" "$target"
     elif [[ -d "$help_dir" ]] && compgen -G "$help_dir/maxima.info-[0-9]*" >/dev/null; then
-        python3 - "$help_dir" "$target" <<'PY'
-import pathlib, re, sys
-source, target = map(pathlib.Path, sys.argv[1:])
-parts = [p for p in source.glob("maxima.info-[0-9]*") if p.is_file()]
-parts.sort(key=lambda p: int(re.search(r"-(\d+)$", p.name).group(1)))
-if not parts:
-    raise SystemExit("No split English Maxima Info chunks found")
-with target.open("wb") as out:
-    for part in parts:
-        with part.open("rb") as stream:
-            while chunk := stream.read(1024 * 1024):
-                out.write(chunk)
-PY
+        python3 "$ROOT/scripts/combine-maxima-info.py" "$help_dir" "$target"
     elif [[ -f "$MAXIMA_SRC/doc/info/maxima.info" ]]; then
         cp "$MAXIMA_SRC/doc/info/maxima.info" "$target"
     else

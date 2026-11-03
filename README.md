@@ -23,6 +23,10 @@ Requires Rust and Maxima (the `maxima` executable and, for help, its Info manual
 Native integration tests exercise the Lisp driver with the installed Maxima;
 its tab-separated protocol supports both SBCL and Ubuntu's GCL-based build.
 
+The Flatpak package uses the Freedesktop 25.08 platform, SDK and Rust stable
+extension. Keep their branches aligned in the packaging manifest and workflow;
+the 24.08 Rust extension is too old for egui's Rust 1.95 minimum requirement.
+
 ```
 cargo run --release -p maximus-app -- [--minimal] [--run] [notebook.maximus]
 cargo run --release -p maximus-app -- --mcp
@@ -109,7 +113,8 @@ Prepare these local inputs (build scripts never silently download toolchains):
   [ECL](https://ecl.common-lisp.dev/). The tested archive SHA-256 is
   `416d5707bf11d2b3d8d33d6791419a786e4cc59ac0cc3ec505ee59b51a9f5c9a`.
 - `build/maxima-code`: the [Maxima source](https://sourceforge.net/p/maxima/code/).
-- A full English Maxima Info manual: installed `maxima.info-*` chunks in
+- A full English Maxima Info manual: installed `maxima.info-N` or
+  `maxima.info-N.gz` chunks (combined in numeric order) in
   `/usr/share/info`, a source-tree `doc/info/maxima.info`, or an explicit
   `--help-info /path/to/complete.info` argument to the runtime builder.
 - Native C/C++ tools, `make`, `m4`, Python 3, Rust, and Trunk.

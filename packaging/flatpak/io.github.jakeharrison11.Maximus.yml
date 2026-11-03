@@ -1,6 +1,6 @@
 app-id: io.github.jakeharrison11.Maximus
 runtime: org.freedesktop.Platform
-runtime-version: '24.08'
+runtime-version: '25.08'
 sdk: org.freedesktop.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
@@ -12,7 +12,7 @@ finish-args:
   - --device=dri
   - --filesystem=xdg-documents
 build-options:
-  append-path: /usr/lib/sdk/rust-stable/bin
+  prepend-path: /usr/lib/sdk/rust-stable/bin
   env:
     CARGO_HOME: /run/build/maximus/cargo
   build-args:
@@ -21,7 +21,9 @@ modules:
   - name: maximus
     buildsystem: simple
     build-commands:
-      - cargo build --release -p maximus-app --bin maximus
+      - rustc --version
+      - cargo --version
+      - cargo build --locked --release -p maximus-app --bin maximus
       - install -Dm755 target/release/maximus /app/bin/maximus
       - install -Dm644 packaging/maximus.desktop /app/share/applications/io.github.jakeharrison11.Maximus.desktop
       - install -Dm644 packaging/io.github.jakeharrison11.Maximus.metainfo.xml /app/share/metainfo/io.github.jakeharrison11.Maximus.metainfo.xml

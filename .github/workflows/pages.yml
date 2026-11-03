@@ -108,6 +108,7 @@ jobs:
 
       - name: Test Rust workspace and WASM compatibility
         run: |
+          python3 -m unittest discover -s scripts -p 'test_*.py'
           cargo test --workspace --locked
           cargo check -p maximus-app --locked --target wasm32-unknown-unknown
 
