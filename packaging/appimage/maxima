@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+PREFIX="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+export MAXIMA_PREFIX="$PREFIX"
+unset MAXIMA_DIRECTORY MAXIMA_LISP MAXIMA_VERSION SBCL_HOME
+exec "$PREFIX/lib/maxima/5.50.0/binary-sbcl/maxima" --noinform \
+    --end-runtime-options --eval '(cl-user::run)' --end-toplevel-options "$@"

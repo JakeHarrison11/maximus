@@ -4,7 +4,7 @@ runtime-version: '25.08'
 sdk: org.freedesktop.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
-command: maximus
+command: maximus-launcher
 finish-args:
   - --share=ipc
   - --socket=wayland
@@ -18,6 +18,47 @@ build-options:
   build-args:
     - --share=network
 modules:
+  - name: sbcl
+    buildsystem: simple
+    build-options:
+      no-debuginfo: true
+    build-commands:
+      - INSTALL_ROOT=/app sh install.sh
+      - install -Dm644 COPYING /app/share/licenses/sbcl/COPYING
+    sources:
+      - type: archive
+        url: https://downloads.sourceforge.net/project/sbcl/sbcl/2.5.11/sbcl-2.5.11-x86-64-linux-binary.tar.bz2
+        sha256: 4f229e3e4106080820d095bb30ded0cd475a5c3202cbb8e580179d6b1cbaad2a
+  - name: maxima
+    buildsystem: autotools
+    no-autogen: true
+    build-options:
+      no-debuginfo: true
+      env:
+        SBCL_HOME: /app/lib/sbcl
+    config-opts:
+      - --enable-sbcl
+      - --enable-sbcl-exec
+      - --with-sbcl=/app/bin/sbcl
+      - --disable-clisp
+      - --disable-gcl
+      - --disable-ecl
+      - --disable-build-docs
+      - --infodir=/app/share/info
+    post-install:
+      - install -Dm644 COPYING /app/share/licenses/maxima/COPYING
+      - mkdir -p /app/share/info
+      - cp doc/info/maxima.info* doc/info/maxima-index*.lisp /app/share/info/
+      - install -Dm644 maxima-source.tar.gz /app/share/maximus/sources/maxima-5.50.0.tar.gz
+      - /app/bin/maxima --version
+    sources:
+      - type: archive
+        url: https://downloads.sourceforge.net/project/maxima/Maxima-source/5.50.0-source/maxima-5.50.0.tar.gz
+        sha256: 0bc4b5e11fe153ef20b24a3a816b668ece5378cc738fa24ca426b62fd6d8fc37
+      - type: file
+        url: https://downloads.sourceforge.net/project/maxima/Maxima-source/5.50.0-source/maxima-5.50.0.tar.gz
+        sha256: 0bc4b5e11fe153ef20b24a3a816b668ece5378cc738fa24ca426b62fd6d8fc37
+        dest-filename: maxima-source.tar.gz
   - name: maximus
     buildsystem: simple
     build-commands:
@@ -25,9 +66,20 @@ modules:
       - cargo --version
       - cargo build --locked --release -p maximus-app --bin maximus
       - install -Dm755 target/release/maximus /app/bin/maximus
+      - install -Dm755 packaging/flatpak/maximus-launcher /app/bin/maximus-launcher
       - install -Dm644 packaging/maximus.desktop /app/share/applications/io.github.jakeharrison11.Maximus.desktop
+      - desktop-file-edit --set-key=Exec --set-value='maximus-launcher %f' /app/share/applications/io.github.jakeharrison11.Maximus.desktop
       - install -Dm644 packaging/io.github.jakeharrison11.Maximus.metainfo.xml /app/share/metainfo/io.github.jakeharrison11.Maximus.metainfo.xml
       - install -Dm644 crates/maximus-app/assets/maximus.png /app/share/icons/hicolor/512x512/apps/io.github.jakeharrison11.Maximus.png
     sources:
       - type: dir
         path: ../..
+        skip:
+          - .git
+          - .flatpak-builder
+          - target
+          - build
+          - dist
+          - temp
+          - scripts/node_modules
+          - scripts/__pycache__

@@ -148,10 +148,14 @@ impl HelpIndex {
 
     /// Loads the Maxima manual from the usual system locations.
     pub fn load_system() -> HelpIndex {
-        let dirs = ["/usr/share/info", "/usr/local/share/info", "/opt/homebrew/share/info", "/usr/share/maxima/info"];
+        let mut dirs: Vec<std::path::PathBuf> = ["/app/share/info", "/usr/share/info", "/usr/local/share/info", "/opt/homebrew/share/info", "/usr/share/maxima/info"]
+            .into_iter().map(std::path::PathBuf::from).collect();
+        if let Some(dir) = std::env::var_os("MAXIMUS_INFO_DIR") {
+            dirs.insert(0, dir.into());
+        }
         for d in dirs {
             let mut text = String::new();
-            let base = std::path::Path::new(d);
+            let base = d.as_path();
             if let Ok(rd) = std::fs::read_dir(base) {
                 let mut files: Vec<_> = rd
                     .filter_map(Result::ok)

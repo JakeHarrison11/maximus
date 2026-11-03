@@ -50,22 +50,35 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libfuse2t64 libxkbcommon-dev libwayland-dev libx11-dev libgl1-mesa-dev libgtk-3-dev
+          sudo apt-get install -y build-essential libfuse2t64 libxkbcommon-dev libwayland-dev libx11-dev libgl1-mesa-dev libgtk-3-dev
       - run: cargo build --release -p maximus-app --bin maximus
       - name: Build AppImage
         env:
           APPIMAGE_EXTRACT_AND_RUN: 1
+          NO_STRIP: 1
         run: |
           curl -fsSL -o linuxdeploy https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
-          chmod +x linuxdeploy
+          curl -fsSL -o appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x linuxdeploy appimagetool
           ID=io.github.jakeharrison11.Maximus
           install -Dm644 crates/maximus-app/assets/maximus.png AppDir/usr/share/icons/hicolor/512x512/apps/$ID.png
+          install -Dm644 packaging/maximus.desktop AppDir/usr/share/applications/$ID.desktop
+          install -Dm644 crates/maximus-app/assets/maximus.png AppDir/$ID.png
+          ln -s "$ID.png" AppDir/.DirIcon
+          install -Dm755 packaging/appimage/AppRun AppDir/AppRun
           ./linuxdeploy --appdir AppDir \
             --executable target/release/maximus \
-            --desktop-file packaging/maximus.desktop \
-            --icon-file crates/maximus-app/assets/maximus.png --icon-filename $ID \
-            --output appimage
-          mv Maximus-*.AppImage maximus-x86_64.AppImage
+            --desktop-file AppDir/usr/share/applications/$ID.desktop \
+            --icon-file AppDir/$ID.png \
+            --custom-apprun packaging/appimage/AppRun
+          # SBCL's appended core must not be rewritten by patchelf or strip.
+          bash scripts/build-bundled-maxima.sh AppDir
+          ARCH=x86_64 ./appimagetool AppDir maximus-x86_64.AppImage
+      - name: Test bundled AppImage engine
+        run: |
+          test -f AppDir/.DirIcon
+          cmp crates/maximus-app/assets/maximus.png AppDir/io.github.jakeharrison11.Maximus.png
+          python3 scripts/test-packaged-maxima.py ./maximus-x86_64.AppImage
       - uses: actions/upload-artifact@v4
         with:
           name: appimage
@@ -86,6 +99,12 @@ jobs:
         run: |
           flatpak-builder --user --force-clean --repo=repo build-dir packaging/flatpak/io.github.jakeharrison11.Maximus.yml
           flatpak build-bundle repo maximus.flatpak io.github.jakeharrison11.Maximus
+      - name: Test bundled Flatpak engine
+        run: |
+          cmp crates/maximus-app/assets/maximus.png build-dir/export/share/icons/hicolor/512x512/apps/io.github.jakeharrison11.Maximus.png
+          grep -Fx 'StartupWMClass=io.github.jakeharrison11.Maximus' build-dir/export/share/applications/io.github.jakeharrison11.Maximus.desktop
+          flatpak install --user -y ./maximus.flatpak
+          python3 scripts/test-packaged-maxima.py flatpak run io.github.jakeharrison11.Maximus
       - uses: actions/upload-artifact@v4
         with:
           name: flatpak

@@ -27,6 +27,18 @@ The Flatpak package uses the Freedesktop 25.08 platform, SDK and Rust stable
 extension. Keep their branches aligned in the packaging manifest and workflow;
 the 24.08 Rust extension is too old for egui's Rust 1.95 minimum requirement.
 
+The x86_64 Flatpak and AppImage bundle Maxima 5.50.0, an SBCL 2.5.11-based
+standalone engine, share packages and the English manual. No host Maxima or
+Lisp installation is required. Gnuplot is not bundled; the built-in plot
+renderer works without it. Maxima's corresponding source archive and both
+projects' license notices are included under `usr/share/maximus/sources` and
+`usr/share/licenses` in the AppImage (under `/app/share` in Flatpak).
+
+The AppImage includes the logo but does not install a desktop launcher;
+Wayland panel/menu integration requires an external AppImage integration tool.
+Flatpak exports the launcher and logo automatically. The desktop entry matches both the Wayland app ID
+and the `io.github.jakeharrison11.Maximus` X11/XWayland window class.
+
 ```
 cargo run --release -p maximus-app -- [--minimal] [--run] [notebook.maximus]
 cargo run --release -p maximus-app -- --mcp

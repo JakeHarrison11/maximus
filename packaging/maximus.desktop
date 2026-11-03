@@ -6,5 +6,7 @@ Comment=Notebook frontend for the Maxima computer algebra system
 Exec=maximus %f
 Icon=io.github.jakeharrison11.Maximus
 Terminal=false
+StartupWMClass=io.github.jakeharrison11.Maximus
+StartupNotify=true
 Categories=Education;Science;Math;
 Keywords=maxima;cas;math;notebook;
