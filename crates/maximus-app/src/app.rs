@@ -171,7 +171,8 @@ impl MaximusApp {
         maximus_math::words::register_functions(help.entries.iter().filter(|e| e.is_function()).map(|e| e.name.clone()));
         let init_tab = settings.side_tab;
         let last_mode = settings.minimal;
-        let session = Session::new(make_backend(&settings));
+        let mut session = Session::new(make_backend(&settings));
+        session.set_numerical(settings.numerical);
         let mut app = MaximusApp {
             settings,
             session,
@@ -1000,6 +1001,7 @@ impl MaximusApp {
             if icons::icon_label_button(ui, Icon::Play, "Evaluate all", true).clicked() {
                 self.session.evaluate_all();
             }
+            self.numerical_checkbox(ui);
             ui.separator();
             for (label, kind) in [("Code", CellKind::Code), ("Text", CellKind::Text), ("Section", CellKind::Section)] {
                 if ui.button(format!("+ {}", label)).clicked() {
@@ -1022,6 +1024,14 @@ impl MaximusApp {
                 }
             });
         });
+    }
+
+    pub(crate) fn numerical_checkbox(&mut self, ui: &mut egui::Ui) {
+        let response = ui.checkbox(&mut self.settings.numerical, "Numeric").on_hover_text("Use numerical evaluation for new calculations");
+        if response.changed() {
+            self.session.set_numerical(self.settings.numerical);
+            self.settings.save();
+        }
     }
 
     pub(crate) fn status_bar(&mut self, ui: &mut egui::Ui) {

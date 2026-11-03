@@ -16,6 +16,7 @@ enum JobKind {
 struct Job {
     kind: JobKind,
     req: RequestKind,
+    numerical: bool,
 }
 
 /// Result of an evaluation that is not attached to a cell (plots, MCP, variable edits).
@@ -52,6 +53,8 @@ pub struct Session {
     inflight: Option<(RequestId, Job)>,
     next_req: RequestId,
     next_raw: u64,
+    numerical: bool,
+    applied_numerical: bool,
     raw_collect: RawResult,
     /// Outputs of the cell being evaluated; they replace the old ones only once evaluation ends.
     cell_collect: Vec<OutputItem>,
@@ -72,6 +75,8 @@ impl Session {
             inflight: None,
             next_req: 1,
             next_raw: 1,
+            numerical: false,
+            applied_numerical: false,
             raw_collect: RawResult::default(),
             cell_collect: Vec::new(),
             user_names: HashSet::new(),
@@ -115,13 +120,18 @@ impl Session {
 
     // ------------------------------------------------------------ queueing
 
+    pub fn set_numerical(&mut self, numerical: bool) {
+        self.numerical = numerical;
+    }
+
     pub fn evaluate_cell(&mut self, id: u64) {
+        let numerical = self.numerical;
         let Some(cell) = self.notebook.cell_mut(id) else { return };
         if cell.kind != CellKind::Code || cell.state == CellState::Queued || cell.state == CellState::Running {
             return;
         }
         cell.state = CellState::Queued;
-        self.queue.push_back(Job { kind: JobKind::Cell(id), req: RequestKind::Eval(String::new()) });
+        self.queue.push_back(Job { kind: JobKind::Cell(id), req: RequestKind::Eval(String::new()), numerical });
     }
 
     pub fn evaluate_all(&mut self) {
@@ -144,7 +154,7 @@ impl Session {
     pub fn submit_raw(&mut self, input: &str) -> u64 {
         let token = self.next_raw;
         self.next_raw += 1;
-        self.queue.push_back(Job { kind: JobKind::Raw(token), req: RequestKind::Eval(input.to_string()) });
+        self.queue.push_back(Job { kind: JobKind::Raw(token), req: RequestKind::Eval(input.to_string()), numerical: self.numerical });
         token
     }
 
@@ -154,7 +164,7 @@ impl Session {
 
     pub fn refresh_variables(&mut self) {
         if !self.queue.iter().any(|j| j.kind == JobKind::Vars) {
-            self.queue.push_back(Job { kind: JobKind::Vars, req: RequestKind::Vars });
+            self.queue.push_back(Job { kind: JobKind::Vars, req: RequestKind::Vars, numerical: self.numerical });
         }
     }
 
@@ -190,6 +200,7 @@ impl Session {
         }
         self.variables.clear();
         self.user_names.clear();
+        self.applied_numerical = false;
         self.last_error = None;
         self.sync_status();
     }
@@ -283,6 +294,17 @@ impl Session {
                 job.req.clone()
             }
             _ => job.req.clone(),
+        };
+        let req = match req {
+            RequestKind::Eval(src) if job.numerical => {
+                self.applied_numerical = true;
+                RequestKind::Eval(format!("numer:true$ float:true$ {src}"))
+            }
+            RequestKind::Eval(src) if self.applied_numerical => {
+                self.applied_numerical = false;
+                RequestKind::Eval(format!("numer:false$ float:false$ {src}"))
+            }
+            req => req,
         };
         let id = self.next_req;
         self.next_req += 1;
@@ -614,6 +636,34 @@ mod tests {
         match &s.notebook.cell(a).unwrap().outputs[0] {
             OutputItem::Result { text, .. } => assert_eq!(text, "2+2;"),
             o => panic!("{:?}", o),
+        }
+    }
+
+    #[test]
+    fn numerical_mode_is_applied_to_new_evaluations_and_reset_when_disabled() {
+        let mut s = Session::new(Box::new(Echo { pending: vec![] }));
+        let id = s.notebook.cells[0].id;
+        s.notebook.cell_mut(id).unwrap().mode = InputMode::Maxima;
+        s.notebook.cell_mut(id).unwrap().source = "1/3".into();
+
+        s.set_numerical(true);
+        s.evaluate_cell(id);
+        for _ in 0..10 {
+            s.tick();
+        }
+        match &s.notebook.cell(id).unwrap().outputs[0] {
+            OutputItem::Result { text, .. } => assert_eq!(text, "numer:true$ float:true$ 1/3;"),
+            output => panic!("{output:?}"),
+        }
+
+        s.set_numerical(false);
+        s.evaluate_cell(id);
+        for _ in 0..10 {
+            s.tick();
+        }
+        match &s.notebook.cell(id).unwrap().outputs[0] {
+            OutputItem::Result { text, .. } => assert_eq!(text, "numer:false$ float:false$ 1/3;"),
+            output => panic!("{output:?}"),
         }
     }
 

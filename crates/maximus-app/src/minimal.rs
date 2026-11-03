@@ -622,6 +622,7 @@ impl MaximusApp {
         let color = ui.visuals().text_color();
         ui.horizontal(|ui| {
             ui.label(RichText::new("Maximus").strong());
+            self.numerical_checkbox(ui);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if icons::icon_button(ui, Icon::Notebook, Vec2::new(28.0, 24.0), true).on_hover_text("Notebook mode (Ctrl+M)").clicked() {
                     self.settings.minimal = false;

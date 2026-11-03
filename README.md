@@ -7,6 +7,7 @@ A textbook-style notebook frontend for the [Maxima](https://maxima.sourceforge.i
 - **Cells** – code, text, section and title cells that can be re-ordered, duplicated, collapsed and re-evaluated without touching the Maxima session. Notebooks are saved as `.maximus` files and can be exported as LaTeX or a Maxima script.
 - **Textbook input** – a structured 2D editor (fractions, powers, roots, integrals, sums, limits, matrices). `\int_0^{\infty}\!x\sin^3(x)\,\mathrm{d}x` and `integrate(x*sin(x)^3,x,0,inf)` produce the same Maxima call. Every cell can also be switched to a plain Maxima or LaTeX source view; LaTeX and Maxima text can be pasted, and the input can be copied as LaTeX or Maxima.
 - **Textbook output** – results are laid out as typeset math (fractions, radicals, big operators, matrices).
+- **Numerical mode** – the **Numeric** checkbox in the notebook toolbar or calculator heading enables numerical evaluation for new calculations; the preference is saved.
 - **Integrated help** – the side panel follows the function under the cursor, right-click a function for its documentation, and browse or search every function of the Maxima manual. Most Maxima functions are reachable from the *Maxima* menu through argument dialogs.
 - **Symbol palette** – Greek letters, operators and structures, plus palettes from plugins.
 - **Variables panel** – view, edit, delete and reset all user variables and functions.

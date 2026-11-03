@@ -43,6 +43,8 @@ pub struct Settings {
     pub side_panel: bool,
     /// Share of the window width taken by the sidebar.
     pub side_fraction: f32,
+    /// Evaluate subsequent Maxima inputs with numerical flags enabled.
+    pub numerical: bool,
     pub contextual_help: bool,
     pub disabled_plugins: Vec<String>,
     /// Folder of the last notebook that was opened, saved or exported; the file picker starts there.
@@ -62,6 +64,7 @@ impl Default for Settings {
             minimal: false,
             side_panel: true,
             side_fraction: 0.3,
+            numerical: false,
             contextual_help: true,
             disabled_plugins: Vec::new(),
             last_dir: None,
