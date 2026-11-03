@@ -105,6 +105,24 @@ mod tests {
     }
 
     #[test]
+    fn textbook_constants_survive_latex_storage_roundtrip() {
+        for (symbol, maxima) in [('ⅈ', "%i"), ('ⅇ', "%e")] {
+            let row = vec![Item::Char('4'), Item::Char(symbol)];
+            let stored = row_to_latex(&row);
+            assert_eq!(from_latex(&stored), row, "{symbol}");
+            assert_eq!(
+                tree_to_maxima(&from_latex(&stored), &ParseCtx::default()).unwrap(),
+                format!("4*{maxima};")
+            );
+        }
+        assert_eq!(from_latex("i"), vec![Item::Char('i')]);
+        assert_eq!(
+            tree_to_maxima(&from_latex("i"), &ParseCtx::default()).unwrap(),
+            "i;"
+        );
+    }
+
+    #[test]
     fn basics() {
         assert_eq!(tm("\\frac{1}{2}x^2+3"), "1/2*x^2+3;");
         assert_eq!(tm("\\frac{d}{dx}\\left(x^2\\sin x\\right)"), "diff(x^2*sin(x),x);");

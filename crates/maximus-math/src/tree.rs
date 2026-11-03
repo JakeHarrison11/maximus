@@ -453,6 +453,10 @@ impl LParser {
                 let content = self.raw_group();
                 if cmd == "text" || cmd == "mbox" || cmd == "textrm" {
                     push_text_content(&content, out);
+                } else if cmd == "mathrm" && content == "i" {
+                    out.push(Item::Char('ⅈ'));
+                } else if cmd == "mathrm" && content == "e" {
+                    out.push(Item::Char('ⅇ'));
                 } else if content.chars().count() == 1 {
                     // \mathrm{d} stays an ordinary letter.
                     out.push(Item::Char(content.chars().next().unwrap()));
