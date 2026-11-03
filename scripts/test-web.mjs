@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { chromium, webkit } from "playwright";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 const base = process.env.MAXIMUS_WEB_URL || "http://127.0.0.1:8765/";
+await mkdir("build", { recursive: true });
 const engine = process.env.MAXIMUS_TEST_BROWSER || "chromium";
 assert.ok(["chromium", "webkit"].includes(engine), `Unknown browser: ${engine}`);
 const browser = await { chromium, webkit }[engine].launch({
@@ -256,11 +257,11 @@ try {
                 }
                 await touchPage.waitForTimeout(150);
             }
-            await touchPage.screenshot({ path: "temp/web-minimal.png" });
+            await touchPage.screenshot({ path: "build/web-minimal.png" });
             await waitForSaved(nb => nb.cells.some(cell => cell.outputs.some(output => output.Result?.text === "42")), "touch calculator evaluation", touchPage);
             assert.match(await touchPage.locator("#engine-status").textContent(), /Maxima ready in .*WASM .*ECL .*modules .*storage/);
             assert.ok(await touchPage.locator("#offline-status").count());
-            await touchPage.screenshot({ path: "temp/web-minimal.png" });
+            await touchPage.screenshot({ path: "build/web-minimal.png" });
             console.log(`PASS: minimal calculator evaluates 6 × 7 through real ${touch ? "touch" : "moving mouse"} keypad events`);
         } finally {
             await touchContext.close();
@@ -268,7 +269,7 @@ try {
     }
 } catch (error) {
     await page.locator("#web-status").evaluate(element => { element.style.display = "none"; });
-    await page.screenshot({ path: "temp/browser-failure.png" });
+    await page.screenshot({ path: "build/browser-failure.png" });
     throw error;
 } finally {
     await browser.close();

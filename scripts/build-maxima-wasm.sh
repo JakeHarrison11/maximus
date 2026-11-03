@@ -2,11 +2,11 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-EMSDK_DIR="$ROOT/temp/emsdk"
-ECL_HOST_DIR="$ROOT/temp/ecl-host"
-ECL_WASM_DIR="$ROOT/temp/ecl-wasm"
-ECL_SRC="$ROOT/temp/ecl-26.3.27"
-MAXIMA_SRC="$ROOT/temp/maxima-code"
+EMSDK_DIR="$ROOT/build/emsdk"
+ECL_HOST_DIR="$ROOT/build/ecl-host"
+ECL_WASM_DIR="$ROOT/build/ecl-wasm"
+ECL_SRC="$ROOT/build/ecl-26.3.27"
+MAXIMA_SRC="$ROOT/build/maxima-code"
 HELP_INFO=""
 OUT_DIR="$ROOT/crates/maximus-app/web/runtime"
 PACKAGES_MODE="all"
@@ -18,11 +18,11 @@ usage() {
 Build the ECL/Maxima browser runtime from locally prepared source/toolchains.
 
 Usage: scripts/build-maxima-wasm.sh [options]
-  --emsdk DIR       Existing Emscripten SDK (default: temp/emsdk)
-  --ecl-host DIR    Existing native ECL install (default: temp/ecl-host)
-  --ecl-wasm DIR    Existing Emscripten ECL build (default: temp/ecl-wasm)
-  --ecl-src DIR     ECL source for library licenses (default: temp/ecl-26.3.27)
-  --maxima-src DIR  Maxima source checkout (default: temp/maxima-code)
+  --emsdk DIR       Existing Emscripten SDK (default: build/emsdk)
+  --ecl-host DIR    Existing native ECL install (default: build/ecl-host)
+  --ecl-wasm DIR    Existing Emscripten ECL build (default: build/ecl-wasm)
+  --ecl-src DIR     ECL source for library licenses (default: build/ecl-26.3.27)
+  --maxima-src DIR  Maxima source checkout (default: build/maxima-code)
   --help-info PATH  Full English Maxima Info file (otherwise autodetected)
   --package NAME   Include only this share package; repeatable
   --no-packages    Do not stage optional share package assets
@@ -122,7 +122,8 @@ rm -rf "$OUT_DIR/packages"
 "$ECL_HOST_DIR/bin/ecl" -norc -shell "$ROOT/scripts/maxima-load-plan.lisp" \
     "$MAXIMA_SRC/" "$OUT_DIR/load-plan.txt"
 [[ -s "$OUT_DIR/load-plan.txt" ]] || { echo "Maxima source-load plan is empty" >&2; exit 1; }
-AOT_DIR="$(mktemp -d "$ROOT/temp/maxima-aot.XXXXXX")"
+mkdir -p "$ROOT/build"
+AOT_DIR="$(mktemp -d "$ROOT/build/maxima-aot.XXXXXX")"
 trap 'rm -r "$AOT_DIR"' EXIT
 "$ECL_HOST_DIR/bin/ecl" -norc -shell "$ROOT/scripts/compile-maxima-wasm.lisp" \
     "$MAXIMA_SRC/" "$ECL_WASM_DIR/target-info.lsp" "$AOT_DIR/" "$OUT_DIR/load-plan.txt"

@@ -1,0 +1,182 @@
+name: Build, test and deploy Pages
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  EMSDK_REVISION: 389a68bc35dcff7ebae4614e1615099dafda00d1
+  EMSCRIPTEN_VERSION: 4.0.15
+  ECL_VERSION: 26.3.27
+  ECL_SHA256: 416d5707bf11d2b3d8d33d6791419a786e4cc59ac0cc3ec505ee59b51a9f5c9a
+  MAXIMA_REVISION: 83548a8c991d47f7bf3317d1d67aaf65a417a281
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install native build and test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential m4 curl python3 maxima maxima-doc \
+            libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxinerama-dev \
+            libxkbcommon-dev libwayland-dev libgl1-mesa-dev libegl1-mesa-dev \
+            libfontconfig1-dev libgtk-3-dev
+
+      - name: Set up Rust
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup target add wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Cache Trunk
+        id: trunk-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/trunk
+          key: ubuntu-24.04-trunk-0.22.1
+
+      - name: Install Trunk
+        if: steps.trunk-cache.outputs.cache-hit != 'true'
+        run: cargo install trunk --locked --version 0.22.1
+
+      - name: Cache Emscripten SDK
+        id: emsdk-cache
+        uses: actions/cache@v4
+        with:
+          path: build/emsdk
+          key: ubuntu-24.04-emsdk-${{ env.EMSDK_REVISION }}-${{ env.EMSCRIPTEN_VERSION }}
+
+      - name: Prepare pinned upstream sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          if [[ ! -d build/emsdk ]]; then
+            git init build/emsdk
+            git -C build/emsdk remote add origin https://github.com/emscripten-core/emsdk.git
+            git -C build/emsdk fetch --depth 1 origin "$EMSDK_REVISION"
+            git -C build/emsdk checkout --detach FETCH_HEAD
+          fi
+          test "$(git -C build/emsdk rev-parse HEAD)" = "$EMSDK_REVISION"
+          build/emsdk/emsdk install "$EMSCRIPTEN_VERSION"
+          build/emsdk/emsdk activate "$EMSCRIPTEN_VERSION"
+          curl --fail --location --retry 5 --retry-all-errors \
+            "https://ecl.common-lisp.dev/static/files/release/ecl-${ECL_VERSION}.tgz" \
+            -o build/ecl.tgz
+          echo "$ECL_SHA256  build/ecl.tgz" | sha256sum --check
+          tar -xzf build/ecl.tgz -C build
+          git init build/maxima-code
+          git -C build/maxima-code remote add origin https://git.code.sf.net/p/maxima/code
+          git -C build/maxima-code fetch --depth 1 origin "$MAXIMA_REVISION"
+          git -C build/maxima-code checkout --detach FETCH_HEAD
+          test "$(git -C build/maxima-code rev-parse HEAD)" = "$MAXIMA_REVISION"
+
+      - name: Cache native and WASM ECL
+        id: ecl-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/ecl-host
+            build/ecl-wasm
+          key: ubuntu-24.04-ecl-${{ env.ECL_SHA256 }}-${{ env.EMSCRIPTEN_VERSION }}-${{ hashFiles('scripts/build-ecl-wasm.sh') }}
+
+      - name: Build ECL
+        if: steps.ecl-cache.outputs.cache-hit != 'true'
+        run: scripts/build-ecl-wasm.sh --jobs 2
+
+      - name: Configure clean Maxima checkout
+        run: |
+          cd build/maxima-code
+          ../ecl-host/bin/ecl -norc -load configure.lisp \
+            -eval '(configure :interactive nil)' -eval '(quit)'
+
+      - name: Test Rust workspace and WASM compatibility
+        run: |
+          cargo test --workspace --locked
+          cargo check -p maximus-app --locked --target wasm32-unknown-unknown
+
+      - name: Build Maxima and browser bundle
+        run: |
+          scripts/build-maxima-wasm.sh
+          scripts/build-web.sh --skip-runtime --public-url ./
+
+      - name: Include corresponding engine sources
+        run: |
+          mkdir -p dist/web/sources
+          cp build/ecl.tgz dist/web/sources/
+          git -C build/maxima-code archive --format=tar.gz \
+            --prefix=maxima/ --output="$GITHUB_WORKSPACE/dist/web/sources/maxima.tar.gz" HEAD
+          git archive --format=tar.gz --prefix=maximus/ \
+            --output="$GITHUB_WORKSPACE/dist/web/sources/maximus.tar.gz" HEAD
+
+      - name: Install browser test dependencies
+        run: |
+          source build/emsdk/emsdk_env.sh
+          npm ci --prefix scripts
+          cd scripts
+          npx playwright install --with-deps chromium webkit
+
+      - name: Test browser runtime, UI, packages and offline reload
+        shell: bash
+        run: |
+          set -euo pipefail
+          source build/emsdk/emsdk_env.sh
+          node --test crates/maximus-app/web/*.test.mjs
+          python3 -m http.server 8765 --bind 127.0.0.1 --directory dist > /tmp/maximus-http.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid"' EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:8765/web/index.html >/dev/null; then break; fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:8765/web/index.html >/dev/null
+          export MAXIMUS_WEB_URL=http://127.0.0.1:8765/web/
+          npm run test:web --prefix scripts
+          MAXIMUS_TEST_BROWSER=webkit node scripts/test-web-runtime.mjs
+          MAXIMUS_TEST_BROWSER=webkit node scripts/test-web.mjs --minimal-only
+
+      - name: Upload tested bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: maximus-web
+          path: dist/web
+          retention-days: 7
+
+      - name: Upload Pages artifact
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist/web
+
+  deploy:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+      - name: Deploy tested bundle
+        id: deployment
+        uses: actions/deploy-pages@v4

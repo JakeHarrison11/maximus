@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SOURCE="$ROOT/temp/ecl-26.3.27"
-EMSDK="$ROOT/temp/emsdk"
+SOURCE="$ROOT/build/ecl-26.3.27"
+EMSDK="$ROOT/build/emsdk"
 JOBS=2
 
 while (($#)); do
@@ -27,10 +27,10 @@ EMSDK="$(realpath "$EMSDK")"
     echo "Missing prepared ECL source or Emscripten SDK" >&2
     exit 1
 }
-HOST="$ROOT/temp/ecl-host"
-WASM="$ROOT/temp/ecl-wasm"
-HOST_BUILD="$ROOT/temp/ecl-host-build"
-WASM_BUILD="$ROOT/temp/ecl-wasm-build"
+HOST="$ROOT/build/ecl-host"
+WASM="$ROOT/build/ecl-wasm"
+HOST_BUILD="$ROOT/build/ecl-host-build"
+WASM_BUILD="$ROOT/build/ecl-wasm-build"
 mkdir -p "$HOST_BUILD" "$WASM_BUILD"
 cd "$HOST_BUILD"
 "$SOURCE/src/configure" --srcdir="$SOURCE/src" --prefix="$HOST" \

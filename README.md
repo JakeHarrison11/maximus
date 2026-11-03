@@ -49,6 +49,46 @@ Contributors and coding agents: see [AGENTS.md](AGENTS.md) for architecture, wor
 
 ## Browser build
 
+### GitHub Pages deployment
+
+The [Pages workflow](.github/workflows/pages.yml) builds and tests pull requests
+and pushes to `master`. Only successful `master` builds deploy. Manual runs are
+also available from the Actions tab.
+
+To enable deployment, choose **Settings > Pages > Build and deployment > Source:
+GitHub Actions** in this repository, then push to `master` or run the workflow.
+The expected project URL is `https://JakeHarrison11.github.io/maximus/`; the
+deployment job reports the actual URL. Pages provides HTTPS, allowing offline
+installation on iPhone. Wait for **Offline ready** before disconnecting.
+
+CI installs pinned Emscripten 4.0.15, verifies the ECL 26.3.27 release archive
+against its SHA-256, and checks out the pinned Maxima and SDK-manager revisions.
+It caches Emscripten, native/WASM ECL, Rust dependencies and Trunk, but rebuilds
+Maxima from current build sources. Native tests, WASM checks, JavaScript tests,
+the full Chromium suite and small-stack WebKit tests must pass before deployment.
+Pull requests produce a downloadable `maximus-web` artifact without Pages write
+permissions. The bundle uses relative URLs and is tested beneath `/web/`, so
+project Pages paths and custom domains do not require different builds.
+
+The deployment includes corresponding source archives under `sources/`:
+`ecl.tgz`, `maxima.tar.gz` and `maximus.tar.gz`. These are not downloaded by the
+offline installer. Keep these archives and the bundled license notices available
+when redistributing the engine.
+
+**Submodules:** pinned downloads are used instead. ECL has a checksummed release
+archive, Emscripten needs its SDK installer regardless, and normal contributors
+do not need large engine checkouts. Submodules would be reasonable if upstream
+sources become actively patched or contributors need coordinated upstream work,
+but introduce recursive-clone/update requirements without speeding up builds.
+All current pins live in the workflow and must be updated deliberately together
+with the tested build scripts.
+
+### Local browser build
+
+Toolchain checkouts and generated engine build files live in the git-ignored
+`build/` directory. Existing checkouts elsewhere can still be used through the
+build scripts' directory options.
+
 The browser UI uses Rust's `wasm32-unknown-unknown` target. The separate CAS engine
 uses **Emscripten 4.0.15** and **ECL 26.3.27**. Native host ECL cross-compiles most
 Maxima Lisp files to C and then WASM during the build. Browser startup initializes
@@ -60,13 +100,13 @@ The tested Maxima source revision is
 
 Prepare these local inputs (build scripts never silently download toolchains):
 
-- `temp/emsdk`: the [Emscripten SDK](https://github.com/emscripten-core/emsdk),
+- `build/emsdk`: the [Emscripten SDK](https://github.com/emscripten-core/emsdk),
   with `./emsdk install 4.0.15` and `./emsdk activate 4.0.15` completed. The tested
   SDK manager revision is `389a68bc35dcff7ebae4614e1615099dafda00d1`.
-- `temp/ecl-26.3.27`: unpack the 26.3.27 source release from
+- `build/ecl-26.3.27`: unpack the 26.3.27 source release from
   [ECL](https://ecl.common-lisp.dev/). The tested archive SHA-256 is
   `416d5707bf11d2b3d8d33d6791419a786e4cc59ac0cc3ec505ee59b51a9f5c9a`.
-- `temp/maxima-code`: the [Maxima source](https://sourceforge.net/p/maxima/code/).
+- `build/maxima-code`: the [Maxima source](https://sourceforge.net/p/maxima/code/).
 - A full English Maxima Info manual: installed `maxima.info-*` chunks in
   `/usr/share/info`, a source-tree `doc/info/maxima.info`, or an explicit
   `--help-info /path/to/complete.info` argument to the runtime builder.
@@ -82,8 +122,8 @@ python3 -m http.server 8080 --directory dist/web
 ```
 
 Open `http://localhost:8080/`. Do not open the HTML as a `file://` URL. The ECL
-builder installs a native host compiler in `temp/ecl-host` and cross-built libraries
-in `temp/ecl-wasm`. Each script supports `--help` for alternate input directories.
+builder installs a native host compiler in `build/ecl-host` and cross-built libraries
+in `build/ecl-wasm`. Each script supports `--help` for alternate input directories.
 After Rust, JS, or HTML changes, reuse the engine with `build-web.sh --skip-runtime`;
 after Lisp driver/bootstrap or C bridge changes, rebuild the runtime first.
 The ECL builder disables OS stack-limit probing (`prlimit64` is unsupported in
@@ -159,7 +199,7 @@ With the built app served on localhost:
 ```sh
 cargo test --workspace
 cargo check -p maximus-app --target wasm32-unknown-unknown
-source temp/emsdk/emsdk_env.sh
+source build/emsdk/emsdk_env.sh
 node --test crates/maximus-app/web/*.test.mjs
 npm ci --prefix scripts
 cd scripts
