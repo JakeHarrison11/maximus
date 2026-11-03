@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.jakeharrison11.Maximus</id>
+  <name>Maximus</name>
+  <summary>Notebook frontend for the Maxima computer algebra system</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-2.0-or-later</project_license>
+  <description>
+    <p>Maximus is a notebook interface for Maxima with textbook-style input and output, integrated help and plotting.</p>
+  </description>
+  <launchable type="desktop-id">io.github.jakeharrison11.Maximus.desktop</launchable>
+  <url type="homepage">https://github.com/JakeHarrison11/maximus</url>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-01-01"/>
+  </releases>
+</component>

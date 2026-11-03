@@ -28,8 +28,14 @@
         (incf i)))))
 
 (defun mx-emit (id kind &rest parts)
-  (format *mx-out* "@@MX~c~a~c~a" #\Tab id #\Tab kind)
-  (dolist (p parts) (format *mx-out* "~c~a" #\Tab (mx-escape p)))
+  (write-string "@@MX" *mx-out*)
+  ;; GCL's FORMAT ~c prints "Tab" rather than the protocol's literal separator.
+  (dolist (p (list id kind))
+    (write-char #\Tab *mx-out*)
+    (princ p *mx-out*))
+  (dolist (p parts)
+    (write-char #\Tab *mx-out*)
+    (write-string (mx-escape p) *mx-out*))
   (terpri *mx-out*)
   (force-output *mx-out*))
 

@@ -248,6 +248,29 @@ mod tests {
     }
 
     #[test]
+    fn driver_emits_tab_separated_frames() {
+        if !maxima_available() {
+            return;
+        }
+        let backend = NativeBackend::new(NativeConfig::default());
+        let output = Command::new("maxima")
+            .arg("--very-quiet")
+            .arg("--disable-readline")
+            .arg(format!("--preload-lisp={}", backend.driver_path.display()))
+            .arg("-r")
+            .arg(":lisp (progn (maxima::mx-emit \"7\" \"error\" (format nil \"a~%b\")) (maxima::bye))")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.lines().any(|line| line == "@@MX\t7\terror\ta\\nb"),
+            "expected a literal tab-separated, escaped frame: {stdout}"
+        );
+    }
+
+    #[test]
     fn evaluates_with_real_maxima() {
         if !maxima_available() {
             return;

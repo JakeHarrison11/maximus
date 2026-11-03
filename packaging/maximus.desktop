@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Maximus
+GenericName=Computer Algebra Notebook
+Comment=Notebook frontend for the Maxima computer algebra system
+Exec=maximus %f
+Icon=io.github.jakeharrison11.Maximus
+Terminal=false
+Categories=Education;Science;Math;
+Keywords=maxima;cas;math;notebook;

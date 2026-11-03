@@ -20,6 +20,8 @@ A textbook-style notebook frontend for the [Maxima](https://maxima.sourceforge.i
 ## Build and run
 
 Requires Rust and Maxima (the `maxima` executable and, for help, its Info manual).
+Native integration tests exercise the Lisp driver with the installed Maxima;
+its tab-separated protocol supports both SBCL and Ubuntu's GCL-based build.
 
 ```
 cargo run --release -p maximus-app -- [--minimal] [--run] [notebook.maximus]

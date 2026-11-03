@@ -1,0 +1,31 @@
+app-id: io.github.jakeharrison11.Maximus
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: maximus
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  - --filesystem=xdg-documents
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    CARGO_HOME: /run/build/maximus/cargo
+  build-args:
+    - --share=network
+modules:
+  - name: maximus
+    buildsystem: simple
+    build-commands:
+      - cargo build --release -p maximus-app --bin maximus
+      - install -Dm755 target/release/maximus /app/bin/maximus
+      - install -Dm644 packaging/maximus.desktop /app/share/applications/io.github.jakeharrison11.Maximus.desktop
+      - install -Dm644 packaging/io.github.jakeharrison11.Maximus.metainfo.xml /app/share/metainfo/io.github.jakeharrison11.Maximus.metainfo.xml
+      - install -Dm644 crates/maximus-app/assets/maximus.png /app/share/icons/hicolor/512x512/apps/io.github.jakeharrison11.Maximus.png
+    sources:
+      - type: dir
+        path: ../..

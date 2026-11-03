@@ -19,7 +19,7 @@ pub fn run_native(opts: Options) -> eframe::Result {
         saved.minimal = true;
     }
     let native = eframe::NativeOptions {
-        viewport: eframe::egui::ViewportBuilder::default().with_inner_size(settings::default_size(saved.minimal, saved.ui_scale)).with_min_inner_size(settings::min_size(saved.minimal, saved.ui_scale)).with_title("Maximus"),
+        viewport: eframe::egui::ViewportBuilder::default().with_inner_size(settings::default_size(saved.minimal, saved.ui_scale)).with_min_inner_size(settings::min_size(saved.minimal, saved.ui_scale)).with_title("Maximus").with_app_id("io.github.jakeharrison11.Maximus").with_icon(eframe::icon_data::from_png_bytes(include_bytes!("../assets/maximus.png")).expect("valid app icon")),
         ..Default::default()
     };
     eframe::run_native("Maximus", native, Box::new(move |cc| Ok(Box::new(MaximusApp::new(cc, opts)))))

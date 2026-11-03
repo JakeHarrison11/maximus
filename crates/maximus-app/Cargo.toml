@@ -38,3 +38,18 @@ js-sys = "0.3"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = ["Window", "Document", "HtmlCanvasElement", "Element", "console", "Response"] }
+
+[package.metadata.deb]
+name = "maximus"
+maintainer = "Jake Harrison"
+section = "science"
+priority = "optional"
+extended-description = "Notebook frontend for the Maxima computer algebra system with textbook input and output, integrated help and plotting."
+depends = "$auto, maxima"
+recommends = "gnuplot, maxima-doc"
+assets = [
+  ["../../target/release/maximus", "usr/bin/", "755"],
+  ["../../packaging/maximus.desktop", "usr/share/applications/io.github.jakeharrison11.Maximus.desktop", "644"],
+  ["../../packaging/io.github.jakeharrison11.Maximus.metainfo.xml", "usr/share/metainfo/", "644"],
+  ["assets/maximus.png", "usr/share/icons/hicolor/512x512/apps/io.github.jakeharrison11.Maximus.png", "644"],
+]

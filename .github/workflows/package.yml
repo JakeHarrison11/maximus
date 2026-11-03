@@ -1,0 +1,107 @@
+name: Package
+
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+    paths:
+      - 'packaging/**'
+      - '.github/workflows/package.yml'
+      - 'crates/maximus-app/Cargo.toml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    uses: ./.github/workflows/ci.yml
+
+  deb:
+    needs: test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libgl1-mesa-dev libgtk-3-dev
+      - run: cargo install cargo-deb --locked
+      - run: cargo build --release -p maximus-app --bin maximus
+      - run: cargo deb -p maximus-app --no-build --output maximus_amd64.deb
+      - run: dpkg-deb --info maximus_amd64.deb && dpkg-deb --contents maximus_amd64.deb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb
+          path: maximus_amd64.deb
+
+  appimage:
+    needs: test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfuse2t64 libxkbcommon-dev libwayland-dev libx11-dev libgl1-mesa-dev libgtk-3-dev
+      - run: cargo build --release -p maximus-app --bin maximus
+      - name: Build AppImage
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: 1
+        run: |
+          curl -fsSL -o linuxdeploy https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          chmod +x linuxdeploy
+          ID=io.github.jakeharrison11.Maximus
+          install -Dm644 crates/maximus-app/assets/maximus.png AppDir/usr/share/icons/hicolor/512x512/apps/$ID.png
+          ./linuxdeploy --appdir AppDir \
+            --executable target/release/maximus \
+            --desktop-file packaging/maximus.desktop \
+            --icon-file crates/maximus-app/assets/maximus.png --icon-filename $ID \
+            --output appimage
+          mv Maximus-*.AppImage maximus-x86_64.AppImage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: appimage
+          path: maximus-x86_64.AppImage
+
+  flatpak:
+    needs: test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install flatpak-builder
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user -y flathub org.freedesktop.Platform//24.08 org.freedesktop.Sdk//24.08 org.freedesktop.Sdk.Extension.rust-stable//24.08
+      - name: Build flatpak
+        run: |
+          flatpak-builder --user --force-clean --repo=repo build-dir packaging/flatpak/io.github.jakeharrison11.Maximus.yml
+          flatpak build-bundle repo maximus.flatpak io.github.jakeharrison11.Maximus
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flatpak
+          path: maximus.flatpak
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [deb, appimage, flatpak]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
