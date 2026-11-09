@@ -114,7 +114,7 @@ fn write_row(row: &[Item], out: &mut String) {
                     match w {
                         Word::Func(f) => match maxima_func_to_latex(&f) {
                             Some(l) => push_cmd(out, l),
-                            None => out.push_str(&format!("\\mathrm{{{}}}", f)),
+                            None => out.push_str(&format!("\\mathrm{{{}}}", f.replace('_', "\\_"))),
                         },
                         Word::Greek(g) => char_to_latex(g, out),
                         Word::Inf => push_cmd(out, "infty"),
@@ -128,7 +128,7 @@ fn write_row(row: &[Item], out: &mut String) {
             Item::Char(c) => char_to_latex(*c, out),
             Item::Func(n) => match maxima_func_to_latex(n) {
                 Some(l) => push_cmd(out, l),
-                None => out.push_str(&format!("\\mathrm{{{}}}", n)),
+                None => out.push_str(&format!("\\mathrm{{{}}}", n.replace('_', "\\_"))),
             },
             Item::Text(t) => out.push_str(&format!("\\text{{{}}}", t)),
             Item::Frac(a, b) => {
@@ -460,7 +460,7 @@ impl LParser {
                 } else if content.chars().count() == 1 {
                     // \mathrm{d} stays an ordinary letter.
                     out.push(Item::Char(content.chars().next().unwrap()));
-                } else if content.chars().all(|c| c.is_alphanumeric()) {
+                } else if content.chars().all(|c| c.is_alphanumeric() || c == '_') {
                     out.push(Item::Func(content));
                 } else {
                     push_text_content(&content, out);

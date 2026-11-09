@@ -70,6 +70,7 @@ pub enum FileKind {
     Open,
     ExportLatex,
     ExportMaxima,
+    ExportPdf,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -349,8 +350,29 @@ impl MaximusApp {
     }
 
     pub fn export(&mut self, kind: FileKind, p: &std::path::Path) {
+        if kind == FileKind::ExportPdf {
+            match crate::pdf_export::export(&self.session.notebook) {
+                Ok(bytes) => {
+                    #[cfg(target_arch = "wasm32")]
+                    let result = self.web_platform.export_bytes(&p.display().to_string(), &bytes);
+                    #[cfg(not(target_arch = "wasm32"))]
+                    let result = std::fs::write(p, bytes).map_err(|e| e.to_string());
+                    match result {
+                        Ok(()) => {
+                            #[cfg(not(target_arch = "wasm32"))]
+                            self.remember_dir(p);
+                            self.messages.push(format!("Exported {}", p.display()));
+                        }
+                        Err(error) => self.messages.push(format!("Could not export PDF {}: {error}", p.display())),
+                    }
+                }
+                Err(error) => self.messages.push(format!("Could not export PDF: {error}")),
+            }
+            return;
+        }
         let text = match kind {
             FileKind::ExportLatex => self.session.notebook.to_latex_document(),
+            FileKind::ExportPdf => unreachable!("PDF export is handled above"),
             _ => self.session.notebook.to_maxima_script(&self.session.parse_ctx()),
         };
         #[cfg(target_arch = "wasm32")]
@@ -721,6 +743,7 @@ impl MaximusApp {
                     FileKind::Save => ("Save notebook", "Maximus notebook", "maximus"),
                     FileKind::ExportLatex => ("Export as LaTeX", "LaTeX", "tex"),
                     FileKind::ExportMaxima => ("Export as Maxima script", "Maxima script", "mac"),
+                    FileKind::ExportPdf => ("Export as PDF", "PDF document", "pdf"),
                 };
                 d = d.set_title(title).add_filter(filter_name, &[ext]);
                 let r = if kind == FileKind::Open { d.pick_file() } else { d.save_file() };
@@ -750,6 +773,7 @@ impl MaximusApp {
                         let ext = match kind {
                             FileKind::ExportLatex => "tex",
                             FileKind::ExportMaxima => "mac",
+                            FileKind::ExportPdf => "pdf",
                             _ => "maximus",
                         };
                         if kind != FileKind::Open && p.extension().is_none() {
@@ -842,6 +866,11 @@ impl MaximusApp {
                 if ui.button("Export as Maxima script…").clicked() {
                     let p = self.default_path().replace(".maximus", ".mac");
                     self.request_file(FileKind::ExportMaxima, p);
+                    ui.close();
+                }
+                if ui.button("Export as PDF…").clicked() {
+                    let p = self.default_path().replace(".maximus", ".pdf");
+                    self.request_file(FileKind::ExportPdf, p);
                     ui.close();
                 }
                 ui.separator();
@@ -1181,6 +1210,7 @@ impl MaximusApp {
             FileKind::Open => "Open notebook",
             FileKind::ExportLatex => "Export LaTeX",
             FileKind::ExportMaxima => "Export Maxima script",
+            FileKind::ExportPdf => "Export PDF",
         };
         egui::Window::new(title).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
             ui.label(if cfg!(target_arch = "wasm32") { "Download filename" } else { "Path" });
@@ -1213,7 +1243,10 @@ impl MaximusApp {
             });
         });
         if go {
-            let p = PathBuf::from(&fd.path);
+            let mut p = PathBuf::from(&fd.path);
+            if fd.kind == FileKind::ExportPdf && p.extension().is_none() {
+                p.set_extension("pdf");
+            }
             match fd.kind {
                 FileKind::Save => self.save_path(&p),
                 FileKind::Open => self.open_path(&p),

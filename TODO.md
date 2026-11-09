@@ -12,4 +12,3 @@
 - Clean up web interface
 - Clean up tooltip text
 - Fix input on keypad
-- Fix fraction navigation/deletion/what gets included

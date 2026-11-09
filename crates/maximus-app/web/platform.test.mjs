@@ -163,3 +163,34 @@ test("directory pickers preserve relative paths and workspace binary bytes", asy
     assert.deepEqual(await window.maximusRuntimeFiles(),
         [{ path: "/workspace/experiment/sub/data.bin", data: [0, 128, 255] }]);
 });
+
+test("PDF download preserves binary bytes, MIME type and filename", async t => {
+    let downloaded;
+    const anchor = { click: t.mock.fn(), remove: t.mock.fn() };
+    const document = {
+        body: { appendChild: t.mock.fn() },
+        createElement(tag) {
+            assert.equal(tag, "a");
+            return anchor;
+        },
+    };
+    const previousDocument = globalThis.document;
+    globalThis.document = document;
+    t.after(() => { globalThis.document = previousDocument; });
+    t.mock.method(URL, "createObjectURL", blob => {
+        downloaded = blob;
+        return "blob:pdf-download";
+    });
+    t.mock.method(globalThis, "setTimeout", () => {});
+
+    const platform = await freshPlatform();
+    const bytes = Uint8Array.from([37, 80, 68, 70, 45, 0, 127, 128, 226, 255]);
+    platform.exportBytes("notebook.pdf", bytes);
+
+    assert.equal(downloaded.type, "application/pdf");
+    assert.deepEqual(new Uint8Array(await downloaded.arrayBuffer()), bytes);
+    assert.equal(anchor.download, "notebook.pdf");
+    assert.equal(anchor.href, "blob:pdf-download");
+    assert.equal(anchor.click.mock.callCount(), 1);
+    assert.equal(anchor.remove.mock.callCount(), 1);
+});
