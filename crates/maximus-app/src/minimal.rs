@@ -8,7 +8,7 @@ use egui::{Align, Color32, Layout, RichText, Vec2};
 use maximus_core::*;
 use maximus_math::{from_latex, Item, ParseCtx};
 use maximus_render::editor::{EditorState, Template};
-use maximus_render::editor_ui::{math_editor, EditorStyle};
+use maximus_render::editor_ui::EditorStyle;
 use std::sync::Arc;
 
 const INPUT_ID: &str = "minimal-input";
@@ -620,6 +620,7 @@ impl MaximusApp {
         ui.set_max_width(ui.available_width());
         let size = self.settings.math_size + 2.0;
         let color = ui.visuals().text_color();
+        let completions = self.completion_candidates();
         ui.horizontal(|ui| {
             ui.label(RichText::new("Maximus").strong());
             self.numerical_checkbox(ui);
@@ -657,7 +658,7 @@ impl MaximusApp {
             style.min_height = 56.0;
             style.keep_focus = true;
             let out = egui::ScrollArea::both().id_salt("calculator-input-scroll").max_height(input_height).auto_shrink([false, true]).show(ui, |ui| {
-                math_editor(ui, eid, &mut self.min_editor, &style)
+                crate::completion::math_editor(ui, eid, &mut self.min_editor, &style, &completions)
             }).inner;
             if out.submit {
                 self.submit_minimal();

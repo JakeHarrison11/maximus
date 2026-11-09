@@ -2,7 +2,7 @@
 
 use crate::backend::*;
 use crate::notebook::*;
-use maximus_math::ParseCtx;
+use maximus_math::{parse_maxima, split_statements, Expr, ParseCtx};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -24,6 +24,13 @@ struct Job {
 pub struct RawResult {
     pub ok: bool,
     pub items: Vec<OutputItem>,
+}
+
+/// The unevaluated source of a successful, directly entered definition.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OriginalDefinition {
+    pub source: String,
+    pub rhs: String,
 }
 
 impl RawResult {
@@ -60,6 +67,7 @@ pub struct Session {
     cell_collect: Vec<OutputItem>,
     /// Names the user has assigned or defined; packages' own variables and functions are not listed.
     user_names: HashSet<String>,
+    original_definitions: HashMap<String, OriginalDefinition>,
     raw_done: HashMap<u64, RawResult>,
 }
 
@@ -80,6 +88,7 @@ impl Session {
             raw_collect: RawResult::default(),
             cell_collect: Vec::new(),
             user_names: HashSet::new(),
+            original_definitions: HashMap::new(),
             raw_done: HashMap::new(),
         };
         s.sync_status();
@@ -102,9 +111,15 @@ impl Session {
         for v in &self.variables {
             if v.is_function {
                 ctx.functions.insert(v.name.clone());
+            } else {
+                ctx.variables.insert(v.name.clone());
             }
         }
         ctx
+    }
+
+    pub fn original_definition(&self, name: &str) -> Option<&OriginalDefinition> {
+        self.original_definitions.get(name)
     }
 
     pub fn is_busy(&self) -> bool {
@@ -200,6 +215,7 @@ impl Session {
         }
         self.variables.clear();
         self.user_names.clear();
+        self.original_definitions.clear();
         self.applied_numerical = false;
         self.last_error = None;
         self.sync_status();
@@ -262,7 +278,7 @@ impl Session {
         changed
     }
 
-    fn dispatch(&mut self, job: Job) {
+    fn dispatch(&mut self, mut job: Job) {
         let req = match &job.kind {
             JobKind::Cell(id) => {
                 let ctx = self.parse_ctx();
@@ -276,7 +292,6 @@ impl Session {
                     }
                     Ok(src) => {
                         cell.state = CellState::Running;
-                        self.user_names.extend(defined_names(&src));
                         RequestKind::Eval(src)
                     }
                     Err(e) => {
@@ -287,14 +302,10 @@ impl Session {
                     }
                 }
             }
-            JobKind::Raw(_) => {
-                if let RequestKind::Eval(src) = &job.req {
-                    self.user_names.extend(defined_names(src));
-                }
-                job.req.clone()
-            }
             _ => job.req.clone(),
         };
+        // Keep the exact dispatched source, before numerical-mode prefixes or later cell edits.
+        job.req = req.clone();
         let req = match req {
             RequestKind::Eval(src) if job.numerical => {
                 self.applied_numerical = true;
@@ -354,6 +365,7 @@ impl Session {
             }),
             EventKind::Vars(v) => {
                 self.variables = v.into_iter().filter(|x| self.user_names.contains(&x.name)).collect();
+                self.original_definitions.retain(|name, _| self.variables.iter().any(|v| &v.name == name));
                 None
             }
             EventKind::Done { ok } => {
@@ -373,6 +385,11 @@ impl Session {
 
     fn finish(&mut self, job: Job, ok: bool) {
         self.inflight = None;
+        if ok {
+            if let RequestKind::Eval(src) = &job.req {
+                self.record_definitions(src);
+            }
+        }
         match job.kind {
             JobKind::Cell(id) => {
                 let outs = std::mem::take(&mut self.cell_collect);
@@ -391,6 +408,65 @@ impl Session {
                 self.raw_done.insert(t, r);
             }
             JobKind::Vars => {}
+        }
+    }
+
+    fn record_definitions(&mut self, src: &str) {
+        for (statement, _) in split_statements(src) {
+            // Nested/dynamic definitions may be real, but must not inherit an older formula.
+            for name in defined_names(&statement) {
+                self.original_definitions.remove(&name);
+                self.user_names.insert(name);
+            }
+            let Ok(expr) = parse_maxima(&statement) else { continue };
+            match expr {
+                Expr::Bin(ref op, ref lhs, ref value) if matches!(op.as_str(), ":" | ":=" | "::=") => {
+                    let name = match lhs.as_ref() {
+                        Expr::Sym(name) if op == ":" => name,
+                        Expr::Call(name, args) if op != ":" && args.iter().all(|arg| matches!(arg, Expr::Sym(_))) => name,
+                        _ => continue,
+                    };
+                    let Some(at) = top_level_separator(&statement, ':') else { continue };
+                    let rhs = statement[at + op.len()..].trim().to_string();
+                    if matches!(value.as_ref(), Expr::Bin(inner, ..) if matches!(inner.as_str(), ":" | ":=" | "::=")) {
+                        self.record_definitions(&rhs);
+                    }
+                    self.original_definitions.insert(name.clone(), OriginalDefinition { source: statement, rhs });
+                    self.user_names.insert(name.clone());
+                }
+                Expr::Call(ref call, ref args) if call == "define" || call == "define_variable" => {
+                    let name = match args.first() {
+                        Some(Expr::Call(name, params)) if call == "define" && params.iter().all(|arg| matches!(arg, Expr::Sym(_))) && args.len() == 2 => name,
+                        Some(Expr::Sym(name)) if call == "define_variable" && args.len() >= 2 => name,
+                        _ => continue,
+                    };
+                    let Some(open) = statement.find('(') else { continue };
+                    if statement[..open].trim() != call {
+                        continue;
+                    }
+                    let inner = &statement[open + 1..statement.len() - 1];
+                    let Some(comma) = top_level_separator(inner, ',') else { continue };
+                    let rhs = &inner[comma + 1..];
+                    let end = top_level_separator(rhs, ',').unwrap_or(rhs.len());
+                    let rhs = rhs[..end].trim().to_string();
+                    self.original_definitions.insert(name.clone(), OriginalDefinition { source: statement, rhs });
+                    self.user_names.insert(name.clone());
+                }
+                Expr::Call(call, args) if call == "kill" => {
+                    for arg in args {
+                        if let Expr::Sym(name) = arg {
+                            if name == "all" {
+                                self.original_definitions.clear();
+                                self.user_names.clear();
+                            } else {
+                                self.original_definitions.remove(&name);
+                                self.user_names.remove(&name);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
         }
     }
 
@@ -422,6 +498,28 @@ impl Session {
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
     }
+}
+
+/// Find a delimiter outside strings and brackets in an already split statement.
+fn top_level_separator(src: &str, separator: char) -> Option<usize> {
+    let (mut depth, mut quoted, mut escaped) = (0, false, false);
+    for (at, ch) in src.char_indices() {
+        if escaped {
+            escaped = false;
+        } else if ch == '\\' {
+            escaped = true;
+        } else if ch == '"' {
+            quoted = !quoted;
+        } else if !quoted {
+            match ch {
+                '(' | '[' | '{' => depth += 1,
+                ')' | ']' | '}' => depth -= 1,
+                _ if ch == separator && depth == 0 => return Some(at),
+                _ => {}
+            }
+        }
+    }
+    None
 }
 
 /// Names that a piece of Maxima source assigns (`a: 1`, `a[i]: 1`, `a :: 1`) or defines
@@ -536,6 +634,101 @@ mod tests {
         assert_eq!(n("block([i:0], total: i)"), vec!["i", "total"]);
     }
 
+    #[test]
+    fn original_formulas_preserve_rhs_and_ignore_nested_or_dynamic_assignments() {
+        let mut s = Session::new(Box::new(Echo { pending: vec![] }));
+        s.record_definitions(r#"a: 2 * %pi / 3$ /* b:wrong */ b: [a, "x:$,y", f(1,2)]$ f(x) := x + a$ a: b + 1;"#);
+        assert_eq!(s.original_definition("a").unwrap().rhs, "b + 1");
+        assert_eq!(s.original_definition("b").unwrap().rhs, r#"[a, "x:$,y", f(1,2)]"#);
+        assert_eq!(s.original_definition("f").unwrap().source, "f(x) := x + a");
+        s.record_definitions(r#"define(g(x), x + f(a))$ define_variable(c, [a,"a,b"], any)$"#);
+        assert_eq!(s.original_definition("g").unwrap().rhs, "x + f(a)");
+        assert_eq!(s.original_definition("c").unwrap().rhs, r#"[a,"a,b"]"#);
+        s.record_definitions(r#"block([i:0], a: i)$ a[1]: 7$ b :: 4$ "fake: 1";"#);
+        assert!(s.original_definition("a").is_none());
+        assert!(s.original_definition("b").is_none());
+        assert!(s.original_definition("fake").is_none());
+        assert!(s.original_definition("i").is_none());
+        s.record_definitions("a: b: 3 + 4$");
+        assert_eq!(s.original_definition("a").unwrap().rhs, "b: 3 + 4");
+        assert_eq!(s.original_definition("b").unwrap().rhs, "3 + 4");
+        s.record_definitions("a: [1,2]$ a[1]: 4$");
+        assert!(s.original_definition("a").is_none());
+    }
+
+    #[test]
+    fn successful_raw_definitions_replace_formulas_but_failed_edits_do_not() {
+        let mut s = Session::new(Box::new(Echo { pending: vec![] }));
+        s.submit_raw("a: 2 * %pi$ f(x):=x+a$");
+        s.tick();
+        assert!(s.original_definition("a").is_none());
+        s.tick();
+        assert_eq!(s.original_definition("a").unwrap().rhs, "2 * %pi");
+        s.submit_raw("a: boom$ b: 3$");
+        s.tick();
+        s.tick();
+        assert_eq!(s.original_definition("a").unwrap().rhs, "2 * %pi");
+        assert!(!s.user_names.contains("b"));
+        s.set_variable("a", "f(2) + 1");
+        s.tick();
+        s.tick();
+        assert_eq!(s.original_definition("a").unwrap().rhs, "f(2) + 1");
+    }
+
+    #[test]
+    fn cell_formulas_use_the_dispatched_source_and_survive_failed_reevaluation() {
+        let mut s = Session::new(Box::new(Echo { pending: vec![] }));
+        let id = s.notebook.cells[0].id;
+        let cell = s.notebook.cell_mut(id).unwrap();
+        cell.mode = InputMode::Maxima;
+        cell.source = "a: 1 + 2$".into();
+        s.evaluate_cell(id);
+        s.tick();
+        s.notebook.cell_mut(id).unwrap().source = "a: boom$".into();
+        s.tick();
+        assert_eq!(s.original_definition("a").unwrap().rhs, "1 + 2");
+        // Supply the variable snapshot for the successful evaluation.
+        let vars_id = s.inflight.as_ref().unwrap().0;
+        s.handle_event(Event { id: vars_id, kind: EventKind::Vars(vec![VarInfo { name: "a".into(), value: "3".into(), is_function: false }]) });
+        s.handle_event(Event { id: vars_id, kind: EventKind::Done { ok: true } });
+        s.evaluate_cell(id);
+        s.tick();
+        s.tick();
+        assert_eq!(s.original_definition("a").unwrap().rhs, "1 + 2");
+    }
+
+    #[test]
+    fn removing_resetting_and_restarting_discard_original_formulas() {
+        let mut s = Session::new(Box::new(Echo { pending: vec![] }));
+        s.record_definitions("a: 1+2$ b: a+1$");
+        s.remove_variable("a");
+        s.tick();
+        s.tick();
+        assert!(s.original_definition("a").is_none());
+        assert!(s.original_definition("b").is_some());
+        s.tick();
+        assert!(s.original_definition("b").is_none()); // Absent from the backend snapshot.
+        s.record_definitions("a: 1+2$");
+        s.reset_variables();
+        s.tick();
+        s.tick();
+        assert!(s.original_definitions.is_empty());
+        assert!(s.user_names.is_empty());
+        s.record_definitions("f(x):=x+1$");
+        s.restart();
+        assert!(s.original_definitions.is_empty());
+    }
+
+    #[test]
+    fn parse_context_includes_multi_letter_variable_names() {
+        let mut s = Session::new(Box::new(Echo { pending: vec![] }));
+        s.variables.push(VarInfo { name: "mass".into(), value: "2".into(), is_function: false });
+        s.variables.push(VarInfo { name: "force".into(), value: "force(x):=mass*x".into(), is_function: true });
+        let ctx = s.parse_ctx();
+        let row = maximus_math::from_latex("mass+1");
+        assert_eq!(maximus_math::tree_to_plain_maxima(&row, &ctx).unwrap(), "mass+1");
+    }
+
     /// Echo backend: replies to every Eval with the input as a result.
     struct Echo {
         pending: Vec<Event>,
@@ -593,7 +786,7 @@ mod tests {
         let first = session.submit_raw("f(x):=x$");
         session.tick();
         let queued = session.submit_raw("b:2$");
-        assert!(session.user_names.contains("f"));
+        assert!(!session.user_names.contains("f"));
         session.restart();
         assert!(session.take_raw(first).unwrap().error().is_some());
         assert!(session.take_raw(queued).unwrap().error().is_some());

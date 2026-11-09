@@ -109,10 +109,12 @@ impl MaximusApp {
             for v in &vars {
                 let mut delete_slot = egui::Rect::NOTHING;
                 let mut edit_slot = egui::Rect::NOTHING;
+                let mut insert_slot = egui::Rect::NOTHING;
                 let row = ui.horizontal(|ui| {
                     // The delete button is placed once the row's height is known, so it is centred on the row.
                     delete_slot = ui.allocate_space(egui::vec2(22.0, 22.0)).1;
                     edit_slot = ui.allocate_space(egui::vec2(22.0, 22.0)).1;
+                    insert_slot = ui.allocate_space(egui::vec2(46.0, 22.0)).1;
                     let editing = self.var_edit.as_ref().map_or(false, |e| e.name == v.name);
                     if editing {
                         let mut edit = self.var_edit.take().unwrap();
@@ -131,8 +133,15 @@ impl MaximusApp {
                             self.var_edit = Some(edit);
                         }
                     } else {
-                        // One typeset line per row (name = value), so it looks the same everywhere and can be selected.
                         let mut row: Vec<Item> = Vec::new();
+                        let original = self.session.original_definition(&v.name).map(|d| d.source.clone());
+                        if let Some(source) = &original {
+                            match maximus_math::maxima_script_to_tree(source) {
+                                Ok(tree) => row.extend(tree),
+                                Err(_) => row.push(Item::Text(source.clone())),
+                            }
+                            row.push(Item::Char('→'));
+                        }
                         let value_tree = self.tree_for(&v.value);
                         if !v.is_function {
                             row.extend(name_row(&v.name));
@@ -148,8 +157,13 @@ impl MaximusApp {
                             v.name.hash(&mut h);
                             h.finish() as usize
                         });
-                        let (resp, sel) = self.selectable_tree(ui, key, &format!("{}={}", v.name, v.value), &row, size, color);
+                        let (resp, sel) = self.selectable_tree(ui, key, &format!("{:?}:{}={}", original, v.name, v.value), &row, size, color);
+                        let resp = if original.is_some() { resp.on_hover_text("Original definition → resolved value") } else { resp };
                         resp.context_menu(|ui| {
+                            if ui.button("Insert").clicked() {
+                                self.pending.push(Insert::Text(v.name.clone()));
+                                ui.close();
+                            }
                             if ui.button("Edit").clicked() {
                                 self.start_var_edit(v);
                                 ui.close();
@@ -171,6 +185,10 @@ impl MaximusApp {
                 let eslot = egui::Rect::from_center_size(egui::pos2(edit_slot.center().x, row.response.rect.center().y), edit_slot.size());
                 if ui.put(eslot, |ui: &mut egui::Ui| icons::icon_button(ui, Icon::Edit, eslot.size(), false).on_hover_text("Edit")).clicked() {
                     self.start_var_edit(v);
+                }
+                let islot = egui::Rect::from_center_size(egui::pos2(insert_slot.center().x, row.response.rect.center().y), insert_slot.size());
+                if ui.put(islot, egui::Button::new("Insert").wrap_mode(egui::TextWrapMode::Extend)).on_hover_text("Insert this name at the cursor").clicked() {
+                    self.pending.push(Insert::Text(v.name.clone()));
                 }
                 ui.separator();
             }
@@ -211,12 +229,13 @@ impl MaximusApp {
 
     /// Starts editing a variable or function definition as textbook input.
     fn start_var_edit(&mut self, v: &maximus_core::VarInfo) {
+        let value = self.session.original_definition(&v.name).map_or(v.value.as_str(), |d| if v.is_function { d.source.as_str() } else { d.rhs.as_str() });
         let latex = if v.is_function {
-            maximus_math::maxima_script_to_latex(&v.value)
+            maximus_math::maxima_script_to_latex(value)
         } else {
-            maximus_math::maxima_to_latex(&v.value)
+            maximus_math::maxima_to_latex(value)
         }
-        .unwrap_or_else(|_| v.value.clone());
+        .unwrap_or_else(|_| value.to_string());
         self.var_edit = Some(VarEdit { name: v.name.clone(), is_function: v.is_function, editor: EditorState::from_latex(&latex), fresh: true });
     }
 

@@ -3,8 +3,10 @@
 mod app;
 mod catalog;
 mod cells;
+mod completion;
 mod icons;
 mod minimal;
+mod pdf_export;
 mod settings;
 mod side;
 #[cfg(target_arch = "wasm32")]
