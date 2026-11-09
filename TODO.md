@@ -13,8 +13,8 @@
 - Clean up tooltip text
 - Fix input on keypad
 - Fix fraction navigation/deletion/what gets included
-- Fix multicharacter variables getting multiplied
-- Fix pi getting split
+- Fix pi getting split when type as "pi" in math view
 - Add insert a variable from variables view/autocomplete
 - Add export to PDF
 - Add autocomplete for maxima functions
+- Show originally typed formula in variable view alongside resolved result
