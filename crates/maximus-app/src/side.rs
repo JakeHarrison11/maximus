@@ -10,6 +10,13 @@ use maximus_math::Item;
 use maximus_render::editor::EditorState;
 use maximus_render::editor_ui::{math_editor, EditorStyle};
 
+fn definitions_match(rhs: &str, value: &str) -> bool {
+    matches!(
+        (maximus_math::maxima_to_tree(rhs), maximus_math::maxima_to_tree(value)),
+        (Ok(rhs), Ok(value)) if rhs == value
+    )
+}
+
 impl MaximusApp {
     pub fn side_panel(&mut self, ui: &mut egui::Ui) {
         // Never let content demand more width than the panel has.
@@ -134,7 +141,9 @@ impl MaximusApp {
                         }
                     } else {
                         let mut row: Vec<Item> = Vec::new();
-                        let original = self.session.original_definition(&v.name).map(|d| d.source.clone());
+                        let original = self.session.original_definition(&v.name).and_then(|d| {
+                            (!definitions_match(&d.rhs, &v.value)).then(|| d.source.clone())
+                        });
                         if let Some(source) = &original {
                             match maximus_math::maxima_script_to_tree(source) {
                                 Ok(tree) => row.extend(tree),
@@ -470,5 +479,13 @@ mod tests {
         assert!(variable_name_from_row(&row_from_str("2x")).is_err());
         assert!(variable_name_from_row(&row_from_str("a+b")).is_err());
         assert!(variable_name_from_row(&[]).is_err());
+    }
+
+    #[test]
+    fn identical_original_and_resolved_expressions_are_not_repeated() {
+        assert!(definitions_match("3", "3"));
+        assert!(definitions_match("x + 1", "x+1"));
+        assert!(!definitions_match("1 + 2", "3"));
+        assert!(!definitions_match("unsupported(", "also unsupported("));
     }
 }

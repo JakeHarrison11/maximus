@@ -194,6 +194,7 @@ impl Session {
     }
 
     pub fn remove_variable(&mut self, name: &str) {
+        self.queue.retain(|job| !matches!(job.kind, JobKind::Vars));
         self.submit_raw(&format!("kill({})$", name));
         self.refresh_variables();
     }
@@ -717,6 +718,30 @@ mod tests {
         s.record_definitions("f(x):=x+1$");
         s.restart();
         assert!(s.original_definitions.is_empty());
+    }
+
+    #[test]
+    fn deleting_variable_refreshes_after_any_pending_snapshot() {
+        let mut s = Session::new(Box::new(Echo { pending: vec![] }));
+        s.record_definitions("a: 1$ b: a + 1$");
+        s.variables = vec![
+            VarInfo { name: "a".into(), value: "1".into(), is_function: false },
+            VarInfo { name: "b".into(), value: "2".into(), is_function: false },
+        ];
+        s.refresh_variables();
+        s.remove_variable("a");
+        assert!(matches!(s.queue.front().map(|j| &j.req), Some(RequestKind::Eval(src)) if src == "kill(a)$"));
+        assert!(matches!(s.queue.get(1).map(|j| &j.req), Some(RequestKind::Vars)));
+
+        s.tick();
+        s.tick();
+        let vars_id = s.inflight.as_ref().unwrap().0;
+        s.handle_event(Event {
+            id: vars_id,
+            kind: EventKind::Vars(vec![VarInfo { name: "b".into(), value: "4".into(), is_function: false }]),
+        });
+        s.handle_event(Event { id: vars_id, kind: EventKind::Done { ok: true } });
+        assert_eq!(s.variables, vec![VarInfo { name: "b".into(), value: "4".into(), is_function: false }]);
     }
 
     #[test]
