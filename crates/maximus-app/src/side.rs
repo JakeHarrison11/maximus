@@ -38,16 +38,18 @@ impl MaximusApp {
     }
 
     fn help_tab(&mut self, ui: &mut egui::Ui) {
-        if self.help.is_empty() {
-            ui.label("The Maxima manual was not found on this system.");
-            ui.label(RichText::new("Install the Maxima documentation (Info files) to enable integrated help.").weak());
-            return;
-        }
         ui.add(egui::TextEdit::singleline(&mut self.help_search).hint_text("Search functions…").desired_width(ui.available_width()));
         if !self.help_search.trim().is_empty() {
             let q = self.help_search.trim().to_string();
             let results: Vec<(String, String)> = self.help.search(&q, 30).iter().map(|e| (e.name.clone(), e.kind.clone())).collect();
+            let user_functions: Vec<String> = self.session.variables.iter().filter(|v| v.is_function && v.name.to_lowercase().contains(&q.to_lowercase())).map(|v| v.name.clone()).collect();
             egui::ScrollArea::vertical().id_salt("help-results").show(ui, |ui| {
+                for name in user_functions {
+                    if ui.link(&name).clicked() {
+                        self.help_topic = Some(name);
+                        self.help_search.clear();
+                    }
+                }
                 for (name, kind) in results {
                     ui.horizontal(|ui| {
                         if ui.link(&name).clicked() {
@@ -64,6 +66,22 @@ impl MaximusApp {
             ui.label("Place the cursor on a function name, or search above.");
             return;
         };
+        if let Some(function) = self.session.variables.iter().find(|v| v.is_function && v.name == topic).cloned() {
+            ui.heading(&function.name);
+            ui.label(RichText::new("User-defined function").small().weak());
+            ui.label(RichText::new(&function.value).monospace());
+            if let Some(template) = CallTemplate::from_definition(&function.name, &function.value) {
+                if ui.button("Use…").clicked() {
+                    self.open_call_dialog(template);
+                }
+            }
+            return;
+        }
+        if self.help.is_empty() {
+            ui.label("The Maxima manual was not found on this system.");
+            ui.label(RichText::new("Install the Maxima documentation (Info files) to enable integrated help.").weak());
+            return;
+        }
         let entries: Vec<DocEntry> = self.help.lookup(&topic).into_iter().cloned().collect();
         if entries.is_empty() {
             ui.label(format!("No documentation found for “{}”.", topic));
@@ -332,6 +350,24 @@ impl MaximusApp {
         ui.separator();
         let q = self.func_search.trim().to_lowercase();
         egui::ScrollArea::vertical().id_salt("functions").show(ui, |ui| {
+            let functions: Vec<_> = self.session.variables.iter().filter(|v| v.is_function && v.name.to_lowercase().contains(&q)).cloned().collect();
+            if !functions.is_empty() {
+                egui::CollapsingHeader::new("User-defined functions").default_open(!q.is_empty()).show(ui, |ui| {
+                    for function in functions {
+                        ui.horizontal(|ui| {
+                            let template = CallTemplate::from_definition(&function.name, &function.value);
+                            if ui.add_enabled(template.is_some(), egui::Button::new(&function.name)).on_hover_text(&function.value).clicked() {
+                                if let Some(template) = template {
+                                    self.open_call_dialog(template);
+                                }
+                            }
+                            if ui.small_button("?").clicked() {
+                                self.show_help(&function.name);
+                            }
+                        });
+                    }
+                });
+            }
             if !q.is_empty() {
                 let mut hits: Vec<CallTemplate> = Vec::new();
                 for c in &self.catalog {

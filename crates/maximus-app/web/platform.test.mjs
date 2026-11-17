@@ -162,6 +162,11 @@ test("directory pickers preserve relative paths and workspace binary bytes", asy
         [{ path: "/workspace/experiment/sub/data.bin", bytes: [0, 128, 255] }]);
     assert.deepEqual(await window.maximusRuntimeFiles(),
         [{ path: "/workspace/experiment/sub/data.bin", data: [0, 128, 255] }]);
+    selected = [upload("new.mac", [102, 36])];
+    await platform.loadScript();
+    assert.ok(JSON.parse(platform.takeEvents()).some(event =>
+        event.type === "script_selected" && event.path === "/workspace/new.mac"));
+    assert.deepEqual((await platform.getRuntimeFiles()).find(file => file.path === "/workspace/new.mac").bytes, [102, 36]);
 });
 
 test("PDF download preserves binary bytes, MIME type and filename", async t => {

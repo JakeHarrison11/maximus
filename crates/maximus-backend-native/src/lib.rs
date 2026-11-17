@@ -300,6 +300,33 @@ mod tests {
     }
 
     #[test]
+    fn loading_a_script_discovers_its_definitions() {
+        if !maxima_available() {
+            return;
+        }
+        let backend = NativeBackend::new(NativeConfig::default());
+        let path = backend.driver_path.parent().unwrap().join("script.mac");
+        std::fs::write(&path, "old:11$ f(x):=x+old$ if true then (dynamic_name:42)$").unwrap();
+        let mut session = Session::new(Box::new(backend));
+        assert!(session.run_blocking("old:1+1$", Duration::from_secs(30)).ok);
+        let token = session.load_script(path.to_str().unwrap());
+        let start = std::time::Instant::now();
+        let result = loop {
+            session.tick();
+            if let Some(result) = session.take_raw(token) { break result; }
+            assert!(start.elapsed() < Duration::from_secs(30), "script load timed out");
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert!(result.ok, "{result:?}");
+        assert!(session.variables.iter().any(|v| v.name == "old" && v.value == "11"));
+        assert!(session.variables.iter().any(|v| v.name == "dynamic_name" && v.value == "42"));
+        assert!(session.variables.iter().any(|v| v.name == "f" && v.is_function));
+        assert!(session.original_definition("old").is_none());
+        assert_eq!(session.run_blocking("f(3);", Duration::from_secs(30)).last_text(), Some("14"));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn restart_gives_a_fresh_working_maxima() {
         if !maxima_available() {
             return;

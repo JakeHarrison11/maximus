@@ -325,6 +325,19 @@ export function uploadWorkspace(directory = false) {
     });
 }
 
+export function loadScript() {
+    return attempt("load script", async () => {
+        const selected = await selectFiles({ accept: ".mac" });
+        if (!selected.length) return;
+        const imported = validateFiles(await uploadedFiles(selected, "/workspace"));
+        await serialized("persist script", async () => {
+            const path = imported[0].path;
+            await persistFiles([...files.filter(file => file.path !== path), ...imported]);
+            emit({ type: "script_selected", path });
+        });
+    });
+}
+
 export function removePlugin(folder) {
     return serialized("remove plugin", async () => {
         validateRelativePath(folder);

@@ -398,13 +398,13 @@ impl MaximusApp {
             word = out.help_word.clone();
             if out.secondary_clicked {
                 if let Some(w) = &word {
-                    if self.help.first(w).is_some() {
+                    if self.has_help(w) {
                         self.help_topic = Some(w.clone());
                     }
                 }
             }
             out.response.context_menu(|ui| {
-                if let Some(w) = word.clone().filter(|w| self.help.first(w).is_some()) {
+                if let Some(w) = word.clone().filter(|w| self.has_help(w)) {
                     if ui.button(format!("Help for “{}”", w)).clicked() {
                         self.show_help(&w);
                         ui.close();
@@ -473,7 +473,7 @@ impl MaximusApp {
             self.active_cell = Some(id);
             if self.settings.contextual_help {
                 if let Some(w) = word {
-                    if self.help.first(&w).is_some() && self.help_topic.as_deref() != Some(&w) {
+                    if self.has_help(&w) && self.help_topic.as_deref() != Some(&w) {
                         self.help_topic = Some(w);
                     }
                 }
@@ -560,7 +560,7 @@ impl MaximusApp {
     pub fn help_words_in(&self, text: &str) -> Vec<String> {
         let mut seen: Vec<String> = Vec::new();
         for w in text.split(|c: char| !(c.is_alphanumeric() || c == '_')) {
-            if w.len() > 1 && !seen.iter().any(|s| s == w) && self.help.first(w).is_some() {
+            if !w.is_empty() && !seen.iter().any(|s| s == w) && self.has_help(w) {
                 seen.push(w.to_string());
             }
         }

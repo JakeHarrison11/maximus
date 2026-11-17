@@ -69,6 +69,8 @@ extern "C" {
     fn commit_plugin_files(json: &str) -> js_sys::Promise;
     #[wasm_bindgen(js_name = uploadWorkspace)]
     fn upload_workspace(directory: bool) -> js_sys::Promise;
+    #[wasm_bindgen(js_name = loadScript)]
+    fn load_script() -> js_sys::Promise;
     #[wasm_bindgen(js_name = removePlugin)]
     fn remove_js_plugin(folder: &str) -> js_sys::Promise;
     #[wasm_bindgen(catch, js_name = runtimeFilesSnapshot)]
@@ -96,6 +98,9 @@ pub enum Event {
         contents: String,
     },
     FilesChanged,
+    ScriptSelected {
+        path: String,
+    },
     Error {
         operation: String,
         message: String,
@@ -226,6 +231,10 @@ impl Platform {
     /// `directory = false`: multiple CAS files; true: preserve a selected directory.
     pub fn upload_workspace(&self, directory: bool) {
         launch(upload_workspace(directory));
+    }
+
+    pub fn load_script(&self) {
+        launch(load_script());
     }
 
     pub fn remove_plugin(&self, folder: &str) {

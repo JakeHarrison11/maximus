@@ -632,6 +632,10 @@ impl MaximusApp {
                 let more = icons::icon_button(ui, Icon::Dots, Vec2::new(28.0, 24.0), true).on_hover_text("Calculator options");
                 egui::Popup::menu(&more).show(|ui| {
                     ui.checkbox(&mut self.show_keypad, "Show keypad");
+                    if ui.button("Load Maxima script…").clicked() {
+                        self.request_file(FileKind::LoadScript, self.default_path().replace(".maximus", ".mac"));
+                        ui.close();
+                    }
                     if ui.add_enabled(!self.session.is_busy(), egui::Button::new("Clear history")).on_hover_text("Remove notebook cells; Maxima variables are kept").clicked() {
                         self.session.notebook = Notebook::empty();
                         self.cell_ui.clear();
@@ -665,7 +669,7 @@ impl MaximusApp {
             }
             if self.settings.contextual_help {
                 if let Some(w) = out.help_word {
-                    if self.help.first(&w).is_some() {
+                    if self.has_help(&w) {
                         self.help_topic = Some(w);
                     }
                 }

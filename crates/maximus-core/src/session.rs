@@ -10,6 +10,9 @@ enum JobKind {
     Cell(u64),
     Vars,
     Raw(u64),
+    ScriptBefore(u64),
+    ScriptLoad(u64),
+    ScriptAfter(u64),
 }
 
 #[derive(Clone, Debug)]
@@ -69,6 +72,8 @@ pub struct Session {
     user_names: HashSet<String>,
     original_definitions: HashMap<String, OriginalDefinition>,
     raw_done: HashMap<u64, RawResult>,
+    script_before: HashMap<u64, Vec<VarInfo>>,
+    script_results: HashMap<u64, RawResult>,
 }
 
 impl Session {
@@ -90,6 +95,8 @@ impl Session {
             user_names: HashSet::new(),
             original_definitions: HashMap::new(),
             raw_done: HashMap::new(),
+            script_before: HashMap::new(),
+            script_results: HashMap::new(),
         };
         s.sync_status();
         s
@@ -177,6 +184,21 @@ impl Session {
         self.raw_done.remove(&token)
     }
 
+    /// Loads a script and tracks the definitions it changes in the running CAS.
+    pub fn load_script(&mut self, path: &str) -> u64 {
+        let token = self.next_raw;
+        self.next_raw += 1;
+        let path = path.replace('\\', "\\\\").replace('"', "\\\"");
+        for (kind, req) in [
+            (JobKind::ScriptBefore(token), RequestKind::Vars),
+            (JobKind::ScriptLoad(token), RequestKind::Eval(format!("load(\"{path}\")$"))),
+            (JobKind::ScriptAfter(token), RequestKind::Vars),
+        ] {
+            self.queue.push_back(Job { kind, req, numerical: false });
+        }
+        token
+    }
+
     pub fn refresh_variables(&mut self) {
         if !self.queue.iter().any(|j| j.kind == JobKind::Vars) {
             self.queue.push_back(Job { kind: JobKind::Vars, req: RequestKind::Vars, numerical: self.numerical });
@@ -217,6 +239,8 @@ impl Session {
         self.variables.clear();
         self.user_names.clear();
         self.original_definitions.clear();
+        self.script_before.clear();
+        self.script_results.clear();
         self.applied_numerical = false;
         self.last_error = None;
         self.sync_status();
@@ -249,6 +273,12 @@ impl Session {
             }
             JobKind::Raw(t) => {
                 self.raw_done.insert(t, RawResult { ok: false, items: vec![OutputItem::Error(msg.to_string())] });
+            }
+            JobKind::ScriptBefore(t) | JobKind::ScriptLoad(t) | JobKind::ScriptAfter(t) => {
+                self.script_before.remove(&t);
+                self.script_results.remove(&t);
+                self.raw_done.entry(t).or_insert_with(|| RawResult { ok: false, items: vec![OutputItem::Error(msg.to_string())] });
+                self.queue.retain(|j| !matches!(j.kind, JobKind::ScriptBefore(id) | JobKind::ScriptLoad(id) | JobKind::ScriptAfter(id) if id == t));
             }
             JobKind::Vars => {}
         }
@@ -320,7 +350,7 @@ impl Session {
         };
         let id = self.next_req;
         self.next_req += 1;
-        if matches!(job.kind, JobKind::Raw(_)) {
+        if matches!(job.kind, JobKind::Raw(_) | JobKind::ScriptLoad(_)) {
             self.raw_collect = RawResult::default();
         }
         self.backend.submit(id, req);
@@ -365,8 +395,25 @@ impl Session {
                 Err(e) => OutputItem::Error(format!("Bad plot data: {}", e)),
             }),
             EventKind::Vars(v) => {
-                self.variables = v.into_iter().filter(|x| self.user_names.contains(&x.name)).collect();
-                self.original_definitions.retain(|name, _| self.variables.iter().any(|v| &v.name == name));
+                match job.kind {
+                    JobKind::ScriptBefore(t) => { self.script_before.insert(t, v); }
+                    JobKind::ScriptAfter(t) => {
+                        if let Some(before) = self.script_before.remove(&t) {
+                            for item in &v {
+                                if !before.iter().any(|old| old == item) {
+                                    self.user_names.insert(item.name.clone());
+                                    self.original_definitions.remove(&item.name);
+                                }
+                            }
+                        }
+                        self.variables = v.into_iter().filter(|x| self.user_names.contains(&x.name)).collect();
+                        self.original_definitions.retain(|name, _| self.variables.iter().any(|v| &v.name == name));
+                    }
+                    _ => {
+                        self.variables = v.into_iter().filter(|x| self.user_names.contains(&x.name)).collect();
+                        self.original_definitions.retain(|name, _| self.variables.iter().any(|v| &v.name == name));
+                    }
+                }
                 None
             }
             EventKind::Done { ok } => {
@@ -378,8 +425,8 @@ impl Session {
         if let Some(item) = item {
             match &job.kind {
                 JobKind::Cell(_) => self.cell_collect.push(item),
-                JobKind::Raw(_) => self.raw_collect.items.push(item),
-                JobKind::Vars => {}
+                JobKind::Raw(_) | JobKind::ScriptLoad(_) => self.raw_collect.items.push(item),
+                JobKind::Vars | JobKind::ScriptBefore(_) | JobKind::ScriptAfter(_) => {}
             }
         }
     }
@@ -407,6 +454,25 @@ impl Session {
                 let mut r = std::mem::take(&mut self.raw_collect);
                 r.ok = ok;
                 self.raw_done.insert(t, r);
+            }
+            JobKind::ScriptBefore(t) => {
+                if !ok || !self.script_before.contains_key(&t) {
+                    self.fail_job(Job { kind: JobKind::ScriptBefore(t), req: RequestKind::Vars, numerical: false }, "Could not inspect definitions before loading the script");
+                }
+            }
+            JobKind::ScriptLoad(t) => {
+                let mut result = std::mem::take(&mut self.raw_collect);
+                result.ok = ok;
+                self.script_results.insert(t, result);
+            }
+            JobKind::ScriptAfter(t) => {
+                let missing_snapshot = self.script_before.remove(&t).is_some();
+                let mut result = self.script_results.remove(&t).unwrap_or_default();
+                if !ok || missing_snapshot {
+                    result.ok = false;
+                    result.items.push(OutputItem::Error("Could not inspect definitions after loading the script".into()));
+                }
+                self.raw_done.insert(t, result);
             }
             JobKind::Vars => {}
         }
@@ -622,6 +688,72 @@ pub fn clean_error(e: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct ScriptBackend {
+        pending: Vec<Event>,
+        vars: Vec<VarInfo>,
+        fail_load: bool,
+    }
+
+    impl Backend for ScriptBackend {
+        fn name(&self) -> String { "script test".into() }
+        fn status(&self) -> BackendStatus { BackendStatus::Ready }
+        fn submit(&mut self, id: RequestId, req: RequestKind) {
+            let mut ok = true;
+            match req {
+                RequestKind::Vars => self.pending.push(Event { id, kind: EventKind::Vars(self.vars.clone()) }),
+                RequestKind::Eval(_) => {
+                    self.vars.retain(|v| v.name != "old");
+                    self.vars.push(VarInfo { name: "old".into(), value: "9".into(), is_function: false });
+                    self.vars.push(VarInfo { name: "f".into(), value: "f(x):=x+old".into(), is_function: true });
+                    if self.fail_load {
+                        self.pending.push(Event { id, kind: EventKind::Error("script failed".into()) });
+                        ok = false;
+                    }
+                }
+            }
+            self.pending.push(Event { id, kind: EventKind::Done { ok } });
+        }
+        fn poll(&mut self) -> Vec<Event> { std::mem::take(&mut self.pending) }
+        fn interrupt(&mut self) {}
+        fn restart(&mut self) {}
+    }
+
+    #[test]
+    fn script_load_tracks_changed_definitions_even_on_partial_failure() {
+        for fail_load in [false, true] {
+            let backend = ScriptBackend {
+                pending: vec![],
+                vars: vec![
+                    VarInfo { name: "old".into(), value: "3".into(), is_function: false },
+                    VarInfo { name: "package_internal".into(), value: "7".into(), is_function: false },
+                ],
+                fail_load,
+            };
+            let mut session = Session::new(Box::new(backend));
+            session.record_definitions("old: 1 + 2$");
+            let token = session.load_script("script.mac");
+            for _ in 0..5 { session.tick(); }
+            let result = session.take_raw(token).unwrap();
+            assert_eq!(result.ok, !fail_load);
+            if fail_load { assert_eq!(result.error(), Some("script failed")); }
+            assert!(session.variables.iter().any(|v| v.name == "old" && v.value == "9"));
+            assert!(session.variables.iter().any(|v| v.name == "f" && v.is_function));
+            assert!(!session.variables.iter().any(|v| v.name == "package_internal"));
+            assert!(session.original_definition("old").is_none());
+            assert!(session.parse_ctx().functions.contains("f"));
+        }
+    }
+
+    #[test]
+    fn script_load_escapes_paths_and_fails_if_backend_is_unavailable() {
+        let mut session = Session::new(Box::new(NullBackend::new("unavailable")));
+        let token = session.load_script("a\\b\"c.mac");
+        assert!(matches!(&session.queue[1].req, RequestKind::Eval(code) if code == r#"load("a\\b\"c.mac")$"#));
+        session.tick();
+        assert_eq!(session.take_raw(token).unwrap().error(), Some("unavailable"));
+        assert!(!session.is_busy());
+    }
 
     #[test]
     fn finds_assigned_and_defined_names() {

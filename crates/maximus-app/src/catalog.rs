@@ -80,6 +80,20 @@ impl CallTemplate {
         let body = if cleaned.contains('(') { cleaned } else { "()".to_string() };
         CallTemplate::new(&name, &format!("{}{}", name, body), "")
     }
+
+    /// Builds a call from the parameter list returned by Maxima's fundef.
+    pub fn from_definition(name: &str, definition: &str) -> Option<CallTemplate> {
+        let lhs = definition.split_once(":=")?.0;
+        let maximus_math::Expr::Call(function, args) = maximus_math::parse_maxima(lhs).ok()? else { return None };
+        if function != name {
+            return None;
+        }
+        let args = args.into_iter().map(|arg| match arg {
+            maximus_math::Expr::Sym(name) => Some(format!("<{name}>")),
+            _ => None,
+        }).collect::<Option<Vec<_>>>()?;
+        Some(CallTemplate::new(name, &format!("{name}({})", args.join(", ")), ""))
+    }
 }
 
 pub struct Category {
@@ -249,6 +263,14 @@ pub fn palettes() -> Vec<PaletteGroup> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn user_function_definitions_make_argument_templates() {
+        let call = CallTemplate::from_definition("force", "force(m,a):=m*a").unwrap();
+        assert_eq!(call.template, "force(<m>, <a>)");
+        assert_eq!(CallTemplate::from_definition("constant", "constant():=4").unwrap().template, "constant()");
+        assert!(CallTemplate::from_definition("other", "force(m,a):=m*a").is_none());
+    }
 
     #[test]
     fn fills_templates() {

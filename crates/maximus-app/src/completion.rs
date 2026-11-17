@@ -136,6 +136,9 @@ pub fn math_editor(
     let mut style = style.clone_with_hint(&style.hint);
     style.keep_focus |= pointer_on_popup;
     let mut out = maximus_render::editor_ui::math_editor(ui, id, editor, &style);
+    if out.focused || out.secondary_clicked {
+        out.help_word = editor.help_word_with_functions(|word| candidates.iter().any(|c| c.function && c.name == word));
+    }
     out.changed |= completed.is_some();
     let prefix = editor.completion_prefix();
     let state = ui.data_mut(|d| d.get_temp::<MenuState>(id.with("completion"))).unwrap_or_default();
