@@ -61,6 +61,8 @@ extern "C" {
     fn export_js_notebook(name: &str, contents: &str) -> Result<(), JsValue>;
     #[wasm_bindgen(catch, js_name = exportText)]
     fn export_js_text(name: &str, contents: &str) -> Result<(), JsValue>;
+    #[wasm_bindgen(catch, js_name = exportBytes)]
+    fn export_js_bytes(name: &str, contents: &js_sys::Uint8Array) -> Result<(), JsValue>;
     #[wasm_bindgen(js_name = selectPluginDirectory)]
     fn select_plugin_directory() -> js_sys::Promise;
     #[wasm_bindgen(js_name = commitPluginFiles)]
@@ -200,6 +202,11 @@ impl Platform {
 
     pub fn export_text(&self, name: &str, text: &str) -> Result<(), String> {
         export_js_text(name, text).map_err(js_error)
+    }
+
+    pub fn export_bytes(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
+        let contents = js_sys::Uint8Array::from(bytes);
+        export_js_bytes(name, &contents).map_err(js_error)
     }
 
     pub fn read_settings<T: DeserializeOwned>() -> Result<Option<T>, String> {

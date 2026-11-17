@@ -9,6 +9,8 @@ use std::collections::HashSet;
 pub struct ParseCtx {
     /// Single-letter (or other) names known to be functions, so `f(x)` is a call, not `f*(x)`.
     pub functions: HashSet<String>,
+    /// Defined variable names take precedence over implicit letter multiplication.
+    pub variables: HashSet<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -38,7 +40,13 @@ enum S {
     Matrix(Vec<Vec<Row>>),
 }
 
-fn tokenize(row: &[Item]) -> Result<Vec<S>, String> {
+fn tokenize(row: &[Item], ctx: &ParseCtx) -> Result<Vec<S>, String> {
+    let variable_at = |name: &str, next: usize| {
+        ctx.variables.contains(name) || match row.get(next) {
+            Some(Item::Sub(sub)) => row_text(sub).is_some_and(|sub| ctx.variables.contains(&format!("{name}_{sub}"))),
+            _ => false,
+        }
+    };
     let mut out = Vec::new();
     let mut i = 0;
     while i < row.len() {
@@ -63,6 +71,11 @@ fn tokenize(row: &[Item]) -> Result<Vec<S>, String> {
             Item::Char(c) if c.is_ascii_alphabetic() => {
                 let (run, j, paren) = collect_run(row, i);
                 i = j;
+                let name: String = run.iter().collect();
+                if variable_at(&name, j) || ctx.functions.contains(&name) {
+                    out.push(S::Sym(name));
+                    continue;
+                }
                 for (_, _, w) in split_letters_ctx(&run, paren) {
                     out.push(match w {
                         Word::Func(f) => S::Func(f),
@@ -132,6 +145,7 @@ fn tokenize(row: &[Item]) -> Result<Vec<S>, String> {
                     c => return Err(format!("unsupported symbol '{}'", c)),
                 }
             }
+            Item::Func(n) if variable_at(n, i + 1) => out.push(S::Sym(n.clone())),
             Item::Func(n) => out.push(S::Func(n.clone())),
             Item::Text(t) => out.push(S::Str(t.clone())),
             Item::Frac(a, b) => out.push(S::Frac(a.clone(), b.clone())),
@@ -182,7 +196,7 @@ impl<'a> Sp<'a> {
     }
 
     fn row_expr(&self, r: &[Item]) -> Result<Expr, String> {
-        let mut p = self.sub(tokenize(r)?);
+        let mut p = self.sub(tokenize(r, self.ctx)?);
         let e = p.expr(0)?;
         if p.i < p.t.len() {
             return Err(format!("unexpected {}", describe(&p.t[p.i])));
@@ -191,7 +205,7 @@ impl<'a> Sp<'a> {
     }
 
     fn row_args(&self, r: &[Item]) -> Result<Vec<Expr>, String> {
-        let toks = tokenize(r)?;
+        let toks = tokenize(r, self.ctx)?;
         if toks.is_empty() {
             return Ok(vec![]);
         }
@@ -675,7 +689,7 @@ fn scan_function_defs(toks: &[S], ctx: &mut ParseCtx) {
 
 /// Parses a textbook tree into one or more statements.
 pub fn parse_tree(row: &[Item], ctx: &ParseCtx) -> Result<Vec<Stmt>, String> {
-    let toks = tokenize(row)?;
+    let toks = tokenize(row, ctx)?;
     let mut segs: Vec<(Vec<S>, char)> = Vec::new();
     let mut cur = Vec::new();
     for t in toks {

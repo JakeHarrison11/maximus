@@ -87,11 +87,39 @@ pub fn row_at<'a>(row: &'a mut Row, path: &[(usize, usize)]) -> Option<&'a mut R
     Some(cur)
 }
 
-fn is_operand_item(it: &Item) -> bool {
-    match it {
-        Item::Char(c) => c.is_alphanumeric() || *c == '.' || *c == '∞' || *c == 'ⅇ' || *c == 'ⅈ',
-        Item::Func(_) | Item::Group(..) | Item::Sup(_) | Item::Sub(_) | Item::Frac(..) | Item::Sqrt(..) | Item::Matrix(_) | Item::Text(_) => true,
-        _ => false,
+fn operand_start(row: &[Item], end: usize) -> usize {
+    let mut end = end.min(row.len());
+    while end > 0 && matches!(row[end - 1], Item::Sup(_) | Item::Sub(_)) {
+        end -= 1;
+    }
+    let Some(last) = end.checked_sub(1) else { return 0 };
+    match &row[last] {
+        Item::Char(c) if c.is_ascii_digit() || *c == '.' => {
+            let mut start = last;
+            while start > 0 && matches!(row[start - 1], Item::Char(c) if c.is_ascii_digit() || c == '.') {
+                start -= 1;
+            }
+            start
+        }
+        Item::Char(c) if c.is_ascii_alphabetic() => {
+            let mut start = last;
+            while start > 0 && matches!(row[start - 1], Item::Char(c) if c.is_ascii_alphanumeric()) {
+                start -= 1;
+            }
+            let run: Vec<char> = row[start..end].iter().filter_map(|it| if let Item::Char(c) = it { Some(*c) } else { None }).collect();
+            start + maximus_math::words::split_letters_ctx(&run, false).last().map_or(0, |(a, _, _)| *a)
+        }
+        Item::Group('(', _, _) if last > 0 => {
+            let start = operand_start(row, last);
+            let name = &row[start..last];
+            let is_function = matches!(name, [Item::Func(_)]) || {
+                let run: Vec<char> = name.iter().filter_map(|it| if let Item::Char(c) = it { Some(*c) } else { None }).collect();
+                !run.is_empty() && matches!(maximus_math::words::split_letters_ctx(&run, true).as_slice(), [(0, _, maximus_math::words::Word::Func(_))])
+            };
+            if is_function { start } else { last }
+        }
+        Item::Char(c) if !c.is_alphanumeric() && !matches!(c, '∞' | 'ⅇ' | 'ⅈ') => end,
+        _ => last,
     }
 }
 
@@ -162,12 +190,7 @@ impl EditorState {
     /// Index range in the current row of the operand just before the cursor.
     fn operand_start(&mut self) -> usize {
         let pos = self.cur.pos;
-        let r = self.cur_row();
-        let mut j = pos.min(r.len());
-        while j > 0 && is_operand_item(&r[j - 1]) {
-            j -= 1;
-        }
-        j
+        operand_start(self.cur_row(), pos)
     }
 
     pub fn type_text(&mut self, text: &str) {
@@ -199,15 +222,7 @@ impl EditorState {
         }
         self.clamp();
         match c {
-            '/' => {
-                let start = self.operand_start();
-                let pos = self.cur.pos;
-                let r = self.cur_row();
-                let num: Row = r.drain(start..pos).collect();
-                r.insert(start, Item::Frac(num, vec![]));
-                self.cur.pos = start;
-                self.enter(start, 1, 0);
-            }
+            '/' => self.insert_template(Template::Frac),
             '^' if self.cur.pos == 0 && self.in_empty_sup() => {
                 self.put(Item::Char(maximus_math::NC_MARK));
             }
@@ -281,7 +296,19 @@ impl EditorState {
             }
             '*' => self.put(Item::Char('·')),
             '-' => self.put(Item::Char('−')),
-            c => self.put(Item::Char(c)),
+            c => {
+                self.put(Item::Char(c));
+                if c == 'i' {
+                    let pos = self.cur.pos;
+                    let row = self.cur_row();
+                    if pos >= 2 && matches!(row[pos - 2], Item::Char('p'))
+                        && (pos == 2 || !matches!(row[pos - 3], Item::Char(c) if c.is_ascii_alphabetic()))
+                    {
+                        row.splice(pos - 2..pos, [Item::Char('π')]);
+                        self.cur.pos -= 1;
+                    }
+                }
+            }
         }
     }
 
@@ -348,6 +375,15 @@ impl EditorState {
         (n, offset)
     }
 
+    fn dissolve_fraction(&mut self, path: Path, idx: usize, slot: usize, pos: usize) {
+        let row = row_at(&mut self.row, &path).unwrap();
+        let Item::Frac(mut num, den) = row.remove(idx) else { unreachable!() };
+        let offset = if slot == 0 { 0 } else { num.len() };
+        num.extend(den);
+        row.splice(idx..idx, num);
+        self.cur = Cursor { path, pos: idx + offset + pos };
+    }
+
     pub fn backspace(&mut self) {
         if self.delete_selection() {
             return;
@@ -360,6 +396,7 @@ impl EditorState {
             path.pop();
             let kind = row_at(&mut self.row, &path).and_then(|r| r.get(i)).cloned();
             match kind {
+                Some(Item::Frac(..)) => self.dissolve_fraction(path, i, slot, 0),
                 // Deleting the opening bracket leaves the closing one behind.
                 Some(Item::Group(..)) => {
                     self.dissolve_group(&path, i, Some(false));
@@ -404,7 +441,11 @@ impl EditorState {
                 } else {
                     // Step into the last non-empty slot.
                     let n = item_slot_count(item);
-                    let slot = (0..n).rev().find(|s| item_slot(item, *s).map_or(false, |r| !r.is_empty())).unwrap_or(n - 1);
+                    let slot = if matches!(item, Item::Frac(..)) {
+                        1
+                    } else {
+                        (0..n).rev().find(|s| item_slot(item, *s).map_or(false, |r| !r.is_empty())).unwrap_or(n - 1)
+                    };
                     let len = item_slot(item, slot).map_or(0, |r| r.len());
                     self.enter(pos - 1, slot, len);
                 }
@@ -422,9 +463,13 @@ impl EditorState {
         let r = self.cur_row();
         if pos >= r.len() {
             // At the end of a bracket pair: delete the closing bracket.
-            if let Some((i, _)) = path.last().copied() {
+            if let Some((i, slot)) = path.last().copied() {
                 let mut parent = path.clone();
                 parent.pop();
+                if matches!(row_at(&mut self.row, &parent).and_then(|r| r.get(i)), Some(Item::Frac(..))) {
+                    self.dissolve_fraction(parent, i, slot, pos);
+                    return;
+                }
                 let is_group = row_at(&mut self.row, &parent).map_or(false, |r| matches!(r.get(i), Some(Item::Group(..))));
                 if is_group {
                     let (n, off) = self.dissolve_group(&parent, i, Some(true));
@@ -490,6 +535,42 @@ impl EditorState {
     pub fn insert_symbol(&mut self, c: char) {
         self.delete_selection();
         self.put(Item::Char(c));
+    }
+
+    /// The identifier immediately before the cursor, used for completion.
+    pub fn completion_prefix(&mut self) -> Option<String> {
+        if self.has_selection() {
+            return None;
+        }
+        let pos = self.cur.pos;
+        let row = self.cur_row();
+        let mut start = pos.min(row.len());
+        while start > 0 && matches!(row[start - 1], Item::Char(c) if c.is_ascii_alphanumeric()) {
+            start -= 1;
+        }
+        while start < pos.min(row.len()) && matches!(row[start], Item::Char(c) if c.is_ascii_digit()) {
+            start += 1;
+        }
+        let prefix: String = row[start..pos.min(row.len())].iter().filter_map(|it| if let Item::Char(c) = it { Some(*c) } else { None }).collect();
+        prefix.starts_with(|c: char| c.is_ascii_alphabetic()).then_some(prefix)
+    }
+
+    pub fn complete_identifier(&mut self, name: &str, function: bool) {
+        let Some(prefix) = self.completion_prefix() else { return };
+        self.undo.push((self.row.clone(), self.cur.clone()));
+        let end = self.cur.pos;
+        let start = end - prefix.chars().count();
+        self.cur_row().drain(start..end);
+        self.cur.pos = start;
+        self.insert_row(if function { vec![Item::Func(name.to_string())] } else { Self::parse_text(name) });
+        if function {
+            let pos = self.cur.pos;
+            if matches!(self.cur_row().get(pos), Some(Item::Group('(', _, _))) {
+                self.enter(pos, 0, 0);
+            } else {
+                self.type_char('(');
+            }
+        }
     }
 
     pub fn insert_template(&mut self, t: Template) {
@@ -1221,8 +1302,7 @@ mod tests {
     fn backspace_removes_empty_structures() {
         let mut e = typed("1/");
         e.backspace();
-        // The denominator is empty but the numerator is not: cursor steps out, structure stays.
-        assert_eq!(e.row.len(), 1);
+        assert_eq!(e.latex(), "1");
         let mut e = typed("^");
         e.backspace();
         assert!(e.row.is_empty());
@@ -1286,13 +1366,73 @@ mod tests {
     }
 
     #[test]
-    fn backspace_from_denominator_goes_to_numerator() {
+    fn backspace_from_denominator_removes_fraction_without_losing_content() {
         let mut e = typed("a+1/b");
         assert_eq!(e.cur.path, vec![(2, 1)]);
         e.backspace(); // deletes b
-        e.backspace(); // empty denominator, non-empty numerator: move up
-        assert_eq!(e.cur, Cursor { path: vec![(2, 0)], pos: 1 });
-        assert_eq!(e.latex(), "a+\\frac{1}{}");
+        e.backspace();
+        assert_eq!(e.cur, Cursor { path: vec![], pos: 3 });
+        assert_eq!(e.latex(), "a+1");
+    }
+
+    #[test]
+    fn fraction_captures_one_operand_with_scripts_or_function_arguments() {
+        for (src, expected) in [
+            ("2x/", "2\\frac{x}{}"),
+            ("ab/", "a\\frac{b}{}"),
+            ("12.5/", "\\frac{12.5}{}"),
+            ("xsin(t)/", "x\\frac{\\sin \\left( t \\right)}{}"),
+            ("x(y+1)/", "x\\frac{\\left( y+1 \\right)}{}"),
+        ] {
+            assert_eq!(typed(src).latex(), expected, "{src}");
+        }
+        let mut e = typed("xy^2");
+        e.cur = Cursor { path: vec![], pos: 3 };
+        e.type_char('/');
+        assert_eq!(e.latex(), "x\\frac{y^{2}}{}");
+        let e = typed("/");
+        assert_eq!(e.cur, Cursor { path: vec![(0, 0)], pos: 0 });
+    }
+
+    #[test]
+    fn deleting_fraction_boundaries_preserves_both_slots() {
+        for (slot, pos, backward, expected_pos) in [(0, 0, true, 0), (1, 0, true, 2), (0, 2, false, 2), (1, 2, false, 4)] {
+            let mut e = EditorState::from_latex("\\frac{ab}{cd}");
+            e.cur = Cursor { path: vec![(0, slot)], pos };
+            if backward { e.backspace(); } else { e.delete_forward(); }
+            assert_eq!(e.latex(), "abcd");
+            assert_eq!(e.cur, Cursor { path: vec![], pos: expected_pos });
+        }
+    }
+
+    #[test]
+    fn typed_pi_is_one_editable_symbol() {
+        let mut e = typed("2pi");
+        assert_eq!(e.row, vec![Item::Char('2'), Item::Char('π')]);
+        assert_eq!(maximus_math::tree_to_maxima(&e.row, &Default::default()).unwrap(), "2*%pi;");
+        e.backspace();
+        assert_eq!(e.latex(), "2");
+        assert_eq!(typed("spin").row.len(), 4);
+    }
+
+    #[test]
+    fn completing_identifiers_replaces_only_prefix_and_enters_arguments() {
+        let mut e = typed("x+inte");
+        assert_eq!(e.completion_prefix().as_deref(), Some("inte"));
+        e.complete_identifier("integrate", true);
+        assert_eq!(e.latex(), "x+\\mathrm{integrate}\\left(  \\right)");
+        assert_eq!(e.cur.path.last().map(|(_, slot)| *slot), Some(0));
+        let mut e = typed("ma");
+        e.complete_identifier("mass", false);
+        assert_eq!(e.latex(), "\\mathrm{mass}");
+        assert!(e.cur.path.is_empty());
+        let mut e = typed("2ma");
+        e.complete_identifier("mass", false);
+        assert_eq!(e.latex(), "2\\mathrm{mass}");
+        let mut e = typed("gam");
+        e.complete_identifier("gamma_incomplete", true);
+        e.type_text("a,x");
+        assert_eq!(maximus_math::latex_to_maxima(&e.latex(), &Default::default()).unwrap(), "gamma_incomplete(a,x);");
     }
 
     #[test]

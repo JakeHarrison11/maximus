@@ -68,6 +68,20 @@ mod tests {
     }
 
     #[test]
+    fn defined_names_are_not_split_into_letter_products() {
+        let mut ctx = ParseCtx::default();
+        ctx.variables.insert("mass".into());
+        ctx.variables.insert("speed_1".into());
+        ctx.functions.insert("custom".into());
+        for source in ["mass+1", "\\mathrm{mass}+1"] {
+            assert_eq!(latex_to_maxima(source, &ctx).unwrap(), "mass+1;");
+        }
+        assert_eq!(latex_to_maxima("custom(x)", &ctx).unwrap(), "custom(x);");
+        assert_eq!(latex_to_maxima("\\mathrm{speed}_{1}+1", &ctx).unwrap(), "speed_1+1;");
+        assert_eq!(latex_to_maxima("ab", &ctx).unwrap(), "a*b;");
+    }
+
+    #[test]
     fn integral_examples_match() {
         let a = tm("\\int_0^{\\infty}\\!x\\sin^3\\left(x\\right)\\,\\mathrm{d}x");
         let b = tm("\\text{integrate(}x\\sin^3\\left(x),x,0,\\infty\\right)");

@@ -356,6 +356,21 @@ mod tests {
     }
 
     #[test]
+    fn fractions_navigate_between_slots_and_exit() {
+        let (ctx, mut state, id) = focused_editor("12/34");
+        frame(&ctx, &mut state, id, vec![key(Key::ArrowLeft, Modifiers::NONE), key(Key::ArrowLeft, Modifiers::NONE)]);
+        assert_eq!(state.cur, crate::editor::Cursor { path: vec![(0, 1)], pos: 0 });
+        frame(&ctx, &mut state, id, vec![key(Key::ArrowUp, Modifiers::NONE)]);
+        assert_eq!(state.cur.path, vec![(0, 0)]);
+        frame(&ctx, &mut state, id, vec![key(Key::ArrowRight, Modifiers::NONE), key(Key::ArrowRight, Modifiers::NONE)]);
+        assert_eq!(state.cur.pos, 2);
+        frame(&ctx, &mut state, id, vec![key(Key::ArrowRight, Modifiers::NONE)]);
+        assert_eq!(state.cur, crate::editor::Cursor { path: vec![(0, 1)], pos: 0 });
+        frame(&ctx, &mut state, id, vec![key(Key::ArrowRight, Modifiers::NONE), key(Key::ArrowRight, Modifiers::NONE), key(Key::ArrowRight, Modifiers::NONE)]);
+        assert_eq!(state.cur, crate::editor::Cursor { path: vec![], pos: 1 });
+    }
+
+    #[test]
     fn sticky_focus_survives_outside_clicks_without_changing_other_editors() {
         let ctx = Context::default();
         crate::install_fonts(&ctx);

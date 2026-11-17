@@ -180,7 +180,7 @@ try {
         await page.mouse.click(18, 12);
         await page.waitForTimeout(200);
         const workspaceChooser = page.waitForEvent("filechooser");
-        await page.mouse.click(60, 245);
+        await page.mouse.click(60, 271);
         await (await workspaceChooser).setFiles({
             name: "helper.mac", mimeType: "text/plain", buffer: Buffer.from("uploaded(x):=x+1$"),
         });

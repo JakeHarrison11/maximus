@@ -4,13 +4,14 @@ A textbook-style notebook frontend for the [Maxima](https://maxima.sourceforge.i
 
 ## Features
 
-- **Cells** – code, text, section and title cells that can be re-ordered, duplicated, collapsed and re-evaluated without touching the Maxima session. Notebooks are saved as `.maximus` files and can be exported as LaTeX or a Maxima script.
+- **Cells** – code, text, section and title cells that can be re-ordered, duplicated, collapsed and re-evaluated without touching the Maxima session. Notebooks are saved as `.maximus` files and can be exported as PDF, LaTeX or a Maxima script. PDF export works offline on desktop and in the browser, with embedded fonts, typeset math and 2D plots; unsupported 3D plots produce an explanatory error.
 - **Textbook input** – a structured 2D editor (fractions, powers, roots, integrals, sums, limits, matrices). `\int_0^{\infty}\!x\sin^3(x)\,\mathrm{d}x` and `integrate(x*sin(x)^3,x,0,inf)` produce the same Maxima call. Every cell can also be switched to a plain Maxima or LaTeX source view; LaTeX and Maxima text can be pasted, and the input can be copied as LaTeX or Maxima.
 - **Textbook output** – results are laid out as typeset math (fractions, radicals, big operators, matrices).
 - **Numerical mode** – the **Numeric** checkbox in the notebook toolbar or calculator heading enables numerical evaluation for new calculations; the preference is saved.
 - **Integrated help** – the side panel follows the function under the cursor, right-click a function for its documentation, and browse or search every function of the Maxima manual. Most Maxima functions are reachable from the *Maxima* menu through argument dialogs.
 - **Symbol palette** – Greek letters, operators and structures, plus palettes from plugins.
-- **Variables panel** – view, edit, delete and reset all user variables and functions.
+- **Variables panel** – view, insert, edit, delete and reset all user variables and functions. Definitions entered in the current session are shown alongside their resolved values, and editing starts from the original formula.
+- **Autocomplete** – textbook, Maxima-source and calculator inputs suggest defined variables and Maxima functions (including functions from the installed manual). Use Up/Down to choose, Tab or a click to insert, and Escape to dismiss. Function completion places the cursor inside its argument list.
 - **Plotting** – `plot2d` and `plot3d` are sampled in Maxima and drawn with `egui_plot`; gnuplot can be selected in Settings.
 - **Minimal mode** – a touch-friendly calculator (`Ctrl+M`, the calculator/notebook icons, or `--minimal`). Large keys, tap-open trigonometry, math, calculus and variable menus, and left/right cursor arrows support textbook input without a physical keyboard. Variable labels use the editor's Latin Modern math rendering. Quick keys include **×10ˣ** (multiply by ten to a power, then enter the exponent), **π**, **x²**, and **!**. Trigonometric functions use radians. **≈**, directly above **=**, evaluates the input as a decimal, or converts the latest result when the input is empty; **÷** inserts a textbook fraction and **Ans** reuses the last answer. Click a history input to edit it again. The options menu can hide the keypad or clear history (Maxima variables are kept). On short windows the keypad scrolls, leaving the input and history accessible. The full CAS stays available.
   Minimal mode hides the menu bar and footer, keeping only a compact maximus heading with options and notebook controls. Empty history and input are left blank. Session status, messages, and Stop/Restart controls are available in its options menu. Clicking or tapping outside a Trig/Math/Calc/Vars menu only dismisses it, without activating controls underneath.
@@ -51,6 +52,8 @@ cargo test --workspace
 A guided tour lives in [examples/demo.maximus](examples/demo.maximus): `cargo run --release -p maximus-app -- --run examples/demo.maximus`.
 
 Keyboard: `Enter` evaluates a textbook cell, `Shift+Enter` evaluates a Maxima/LaTeX-source cell, `Ctrl+Shift+Enter` evaluates everything, `Ctrl+.` interrupts, `Ctrl+S` / `Ctrl+O` save and open. In the editor, select with Shift+arrows, click-drag, double-click (word) or `Ctrl+A`; typing replaces the selection, and `/`, `(`, `[`, `{`, `|` or the Fraction/Root buttons wrap it. `Ctrl+C`/`Ctrl+X` copy or cut the selection as LaTeX. `/` makes a fraction, `^` a power, `_` a subscript, `sqrt(` a root.
+
+Without a selection, `/` wraps the immediately preceding operand, including its powers or function arguments, rather than a whole implicit product. An empty fraction starts in its numerator. Up/Down move between fraction slots; Left/Right traverse them and exit the fraction. Backspace at a slot's start or Delete at its end removes the fraction bar without discarding either slot's contents. Typing `pi` inserts a single editable π symbol.
 
 ## Layout
 

@@ -7,7 +7,7 @@ use eframe::egui;
 use egui::{Color32, Key, Modifiers, RichText};
 use maximus_core::*;
 use maximus_math::tree_to_plain_maxima;
-use maximus_render::editor_ui::{math_editor, EditorStyle};
+use maximus_render::editor_ui::EditorStyle;
 
 pub enum CellAction {
     Run(u64),
@@ -347,6 +347,7 @@ impl MaximusApp {
             ui.memory_mut(|m| m.request_focus(eid));
             self.focus_cell = None;
         }
+        let completions = if ui.memory(|m| m.has_focus(eid)) { self.completion_candidates() } else { Vec::new() };
         let latex_view = self.cell_ui.get(&id).map_or(false, |c| c.latex_view);
         let text_color = ui.visuals().text_color();
         let mut submit = false;
@@ -365,7 +366,11 @@ impl MaximusApp {
                 actions.push(CellAction::DeleteBack(id));
             }
             let src = &mut self.session.notebook.cells[idx].source;
-            let out = egui::TextEdit::multiline(src).id(eid).code_editor().desired_rows(1).desired_width(ui.available_width()).hint_text(hint).show(ui);
+            let out = if latex_view {
+                egui::TextEdit::multiline(src).id(eid).code_editor().desired_rows(1).desired_width(ui.available_width()).hint_text(hint).show(ui)
+            } else {
+                crate::completion::maxima_editor(ui, eid, src, hint, &completions)
+            };
             focused = out.response.has_focus();
             if focused {
                 if let Some(cr) = out.cursor_range {
@@ -380,7 +385,7 @@ impl MaximusApp {
             let mut style = EditorStyle::new(size, text_color);
             style.hint = "Type math here".into();
             let cu = self.cell_ui.get_mut(&id).unwrap();
-            let out = math_editor(ui, eid, &mut cu.editor, &style);
+            let out = crate::completion::math_editor(ui, eid, &mut cu.editor, &style, &completions);
             if out.changed {
                 let latex = cu.editor.latex();
                 self.session.notebook.cells[idx].source = latex;

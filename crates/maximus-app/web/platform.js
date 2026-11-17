@@ -251,6 +251,24 @@ export function exportText(name, contents) {
     });
 }
 
+export function exportBytes(name, contents) {
+    return sync("export PDF", () => {
+        validateRelativePath(name);
+        if (name.includes("/")) throw new Error("Download name must not contain folders");
+        const url = URL.createObjectURL(new Blob([contents], { type: "application/pdf" }));
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = name;
+        try {
+            document.body.appendChild(anchor);
+            anchor.click();
+        } finally {
+            anchor.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 60_000);
+        }
+    });
+}
+
 async function uploadedFiles(selected, prefix) {
     return Promise.all(selected.map(async file => {
         const relative = validateRelativePath(file.webkitRelativePath || file.name);
