@@ -106,8 +106,9 @@ async function initialize(files) {
     self.postMessage({ type: "ready" });
 }
 
-async function request({ id, kind, code }) {
+async function request({ id, kind, code, files }) {
     if (!runtime || !/^\d+$/.test(id)) throw new Error("Invalid Maxima request");
+    if (files) mount(files);
     await mountPackages();
     currentId = id;
     completed = false;

@@ -68,6 +68,7 @@ pub struct CallDialog {
 pub enum FileKind {
     Save,
     Open,
+    LoadScript,
     ExportLatex,
     ExportMaxima,
     ExportPdf,
@@ -127,6 +128,7 @@ pub struct MaximusApp {
     pub catalog: Vec<Category>,
     pub palettes: Vec<PaletteGroup>,
     pub startup_tokens: Vec<(String, u64)>,
+    pub script_tokens: Vec<(String, u64)>,
     pub last_autosave: f64,
     pub last_saved_json: String,
     pub scroll_to_cell: Option<u64>,
@@ -206,6 +208,7 @@ impl MaximusApp {
             catalog: catalog::curated(),
             palettes: catalog::palettes(),
             startup_tokens: Vec::new(),
+            script_tokens: Vec::new(),
             last_autosave: 0.0,
             last_saved_json: String::new(),
             scroll_to_cell: None,
@@ -280,6 +283,7 @@ impl MaximusApp {
     }
 
     pub fn restart_backend(&mut self) {
+        self.script_tokens.clear();
         let backend = make_backend(&self.settings);
         let nb = std::mem::replace(&mut self.session.notebook, Notebook::empty());
         self.session = Session::new(backend);
@@ -324,6 +328,31 @@ impl MaximusApp {
             }
             Err(e) => self.messages.push(format!("Could not open {}: {}", p.display(), e)),
         }
+    }
+
+    pub fn load_script_path(&mut self, path: &std::path::Path) {
+        #[cfg(not(target_arch = "wasm32"))]
+        let path = match path.canonicalize() {
+            Ok(path) => path,
+            Err(error) => {
+                self.messages.push(format!("Could not load {}: {error}", path.display()));
+                return;
+            }
+        };
+        #[cfg(target_arch = "wasm32")]
+        let path = path.to_path_buf();
+        let Some(text) = path.to_str() else {
+            self.messages.push(format!("Cannot load a script with a non-UTF-8 path: {}", path.display()));
+            return;
+        };
+        let token = self.session.load_script(text);
+        self.script_tokens.push((text.to_string(), token));
+        #[cfg(not(target_arch = "wasm32"))]
+        self.remember_dir(&path);
+    }
+
+    pub fn has_help(&self, name: &str) -> bool {
+        self.session.variables.iter().any(|v| v.is_function && v.name == name) || self.help.first(name).is_some()
     }
 
     pub fn save_path(&mut self, p: &std::path::Path) {
@@ -584,6 +613,15 @@ impl MaximusApp {
             }
         }
         self.startup_tokens = remaining;
+        let mut remaining = Vec::new();
+        for (path, token) in std::mem::take(&mut self.script_tokens) {
+            match self.session.take_raw(token) {
+                Some(result) if result.ok => self.messages.push(format!("Loaded script {path}")),
+                Some(result) => self.messages.push(format!("Could not load script {path}: {}", result.error().unwrap_or("Maxima reported an error"))),
+                None => remaining.push((path, token)),
+            }
+        }
+        self.script_tokens = remaining;
         let busy = self.session.is_busy() || !self.session.ready && self.session.last_error.is_none();
         if busy {
             ctx.request_repaint_after(std::time::Duration::from_millis(40));
@@ -740,13 +778,14 @@ impl MaximusApp {
                 }
                 let (title, filter_name, ext) = match kind {
                     FileKind::Open => ("Open notebook", "Maximus notebook", "maximus"),
+                    FileKind::LoadScript => ("Load Maxima script", "Maxima script", "mac"),
                     FileKind::Save => ("Save notebook", "Maximus notebook", "maximus"),
                     FileKind::ExportLatex => ("Export as LaTeX", "LaTeX", "tex"),
                     FileKind::ExportMaxima => ("Export as Maxima script", "Maxima script", "mac"),
                     FileKind::ExportPdf => ("Export as PDF", "PDF document", "pdf"),
                 };
                 d = d.set_title(title).add_filter(filter_name, &[ext]);
-                let r = if kind == FileKind::Open { d.pick_file() } else { d.save_file() };
+                let r = if matches!(kind, FileKind::Open | FileKind::LoadScript) { d.pick_file() } else { d.save_file() };
                 let _ = tx.send(r);
             });
             self.file_pick = Some(FilePick { kind, rx, started: std::time::Instant::now(), fallback_path: path });
@@ -755,6 +794,8 @@ impl MaximusApp {
         {
             if kind == FileKind::Open {
                 self.web_platform.open_notebook();
+            } else if kind == FileKind::LoadScript {
+                self.web_platform.load_script();
             } else {
                 self.file_dialog = Some(FileDialog { kind, path });
             }
@@ -776,12 +817,13 @@ impl MaximusApp {
                             FileKind::ExportPdf => "pdf",
                             _ => "maximus",
                         };
-                        if kind != FileKind::Open && p.extension().is_none() {
+                        if !matches!(kind, FileKind::Open | FileKind::LoadScript) && p.extension().is_none() {
                             p.set_extension(ext);
                         }
                         match kind {
                             FileKind::Save => self.save_path(&p),
                             FileKind::Open => self.open_path(&p),
+                            FileKind::LoadScript => self.load_script_path(&p),
                             k => self.export(k, &p),
                         }
                     }
@@ -833,6 +875,7 @@ impl MaximusApp {
         self.active_cell = None;
         self.current_path = None;
         self.session.restart();
+        self.script_tokens.clear();
         self.load_plugins();
     }
 
@@ -882,6 +925,10 @@ impl MaximusApp {
                 {
                     if ui.button("Import CAS files...").on_hover_text("Files are mounted in /workspace; importing resets the CAS").clicked() {
                         self.web_platform.upload_workspace(false);
+                        ui.close();
+                    }
+                    if ui.button("Load Maxima script…").on_hover_text("Load a .mac file into the current Maxima session").clicked() {
+                        self.request_file(FileKind::LoadScript, self.default_path().replace(".maximus", ".mac"));
                         ui.close();
                     }
                 }
@@ -1208,6 +1255,7 @@ impl MaximusApp {
         let title = match fd.kind {
             FileKind::Save => "Save notebook",
             FileKind::Open => "Open notebook",
+            FileKind::LoadScript => "Load Maxima script",
             FileKind::ExportLatex => "Export LaTeX",
             FileKind::ExportMaxima => "Export Maxima script",
             FileKind::ExportPdf => "Export PDF",
@@ -1250,6 +1298,7 @@ impl MaximusApp {
             match fd.kind {
                 FileKind::Save => self.save_path(&p),
                 FileKind::Open => self.open_path(&p),
+                FileKind::LoadScript => self.load_script_path(&p),
                 k => self.export(k, &p),
             }
             keep = false;
@@ -1398,6 +1447,7 @@ impl MaximusApp {
                     self.restart_backend();
                     self.messages.push("Imported files updated. Maxima state and outputs reset.".into());
                 }
+                Event::ScriptSelected { path } => self.load_script_path(std::path::Path::new(&path)),
                 Event::NotebookSaved => {
                     if let Some(snapshot) = self.web_save_pending.take() {
                         self.last_saved_json = snapshot;

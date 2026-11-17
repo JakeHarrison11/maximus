@@ -58,6 +58,10 @@ test("mounts persisted packages at init and refreshes/removes files before evalu
     ] }), [{ type: "ready" }]);
     assert.deepEqual(instance.mounted.get("/maxima/share/demo/a.mac"), [0, 255]);
     assert.deepEqual(instance.mounted.get("/workspace/data.bin"), [1, 128]);
+    await instance.send({ type: "request", id: "3", kind: "vars", code: "", files: [
+        { path: "/workspace/new.mac", data: [102, 36] },
+    ] });
+    assert.deepEqual(instance.mounted.get("/workspace/new.mac"), [102, 36]);
     globalThis.testPackages = [{ path: "/maxima/share/other/b.lisp", data: new Uint8Array([2]) }];
     const result = await instance.send({ type: "request", id: "4", kind: "eval", code: "1+1;" });
     assert.ok(result.some(message => message.line === "@@MX\t4\tdone\tok"));

@@ -851,16 +851,23 @@ impl EditorState {
 
     /// The Maxima function the cursor is on or inside the arguments of, for contextual help.
     pub fn help_word(&mut self) -> Option<String> {
+        self.help_word_with_functions(|_| false)
+    }
+
+    pub fn help_word_with_functions(&mut self, known: impl Fn(&str) -> bool) -> Option<String> {
         use maximus_math::words::Word;
-        fn letters_before(r: &[Item], end: usize) -> Option<String> {
+        fn letters_before(r: &[Item], end: usize, known: &impl Fn(&str) -> bool) -> Option<String> {
             // The last function word in the run of letters/function items ending at `end`.
             let mut start = end;
-            while start > 0 && matches!(&r[start - 1], Item::Char(c) if c.is_ascii_alphabetic() || *c == '_') {
+            while start > 0 && matches!(&r[start - 1], Item::Char(c) if c.is_ascii_alphanumeric() || *c == '_' || *c == '%') {
                 start -= 1;
             }
             if start < end {
                 let run: Vec<char> = r[start..end].iter().filter_map(|i| if let Item::Char(c) = i { Some(*c) } else { None }).collect();
                 let all = run.iter().collect::<String>();
+                if known(&all) {
+                    return Some(all);
+                }
                 let paren = matches!(r.get(end), Some(Item::Group('(', _, _)));
                 let words = maximus_math::words::split_letters_ctx(&run, paren);
                 if let Some((_, _, Word::Func(f))) = words.last() {
@@ -881,11 +888,11 @@ impl EditorState {
         let here = row_at(&mut self.row, &path)?.clone();
         // On or right after a word.
         let mut e = pos.min(here.len());
-        while e < here.len() && matches!(&here[e], Item::Char(c) if c.is_ascii_alphabetic() || *c == '_') {
+        while e < here.len() && matches!(&here[e], Item::Char(c) if c.is_ascii_alphanumeric() || *c == '_' || *c == '%') {
             e += 1;
         }
-        if let Some(w) = letters_before(&here, e) {
-            if maximus_math::words::is_known_func(&w) || w.len() > 2 {
+        if let Some(w) = letters_before(&here, e, &known) {
+            if known(&w) || maximus_math::words::is_known_func(&w) || w.len() > 2 || path.is_empty() || matches!(here.get(e), Some(Item::Group('(', _, _))) {
                 return Some(w);
             }
         }
@@ -907,12 +914,12 @@ impl EditorState {
                 Item::Sqrt(..) => return Some("sqrt".into()),
                 Item::Group('|', ..) => return Some("abs".into()),
                 Item::Group('(', ..) => {
-                    if let Some(w) = letters_before(&parent, i) {
+                    if let Some(w) = letters_before(&parent, i, &known) {
                         return Some(w);
                     }
                 }
                 Item::Sup(_) | Item::Sub(_) | Item::Group(..) => {
-                    if let Some(w) = letters_before(&parent, i) {
+                    if let Some(w) = letters_before(&parent, i, &known) {
                         return Some(w);
                     }
                 }
@@ -1484,6 +1491,16 @@ mod help_tests {
         let mut e = EditorState::default();
         e.insert_template(Template::Sum);
         assert_eq!(e.help_word().as_deref(), Some("sum"));
+    }
+
+    #[test]
+    fn contextual_help_prefers_session_function_names() {
+        let mut e = EditorState::default();
+        e.type_text("mysin");
+        assert_eq!(e.help_word_with_functions(|name| name == "mysin").as_deref(), Some("mysin"));
+        let mut e = EditorState::default();
+        e.type_text("f2(x");
+        assert_eq!(e.help_word_with_functions(|name| name == "f2").as_deref(), Some("f2"));
     }
 }
 
